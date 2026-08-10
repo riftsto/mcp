@@ -1,0 +1,53 @@
+{
+  "name": "@riftsto/mcp",
+  "version": "0.1.0",
+  "description": "MCP server for rifts.to — create live audience surveys and read their results from an AI client.",
+  "license": "Apache-2.0",
+  "author": "rifts.to",
+  "homepage": "https://rifts.to",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/riftsto/rifts-mcp.git"
+  },
+  "type": "module",
+  "bin": {
+    "rifts-mcp": "dist/stdio.js"
+  },
+  "main": "dist/server.js",
+  "types": "dist/server.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/server.d.ts",
+      "default": "./dist/server.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "NOTICE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "mcp",
+    "modelcontextprotocol",
+    "rifts",
+    "survey",
+    "poll"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.9",
+    "typescript": "^5.9.3"
+  }
+}
