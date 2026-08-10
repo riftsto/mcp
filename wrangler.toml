@@ -14,6 +14,20 @@ main = "src/worker.ts"
 # quietly invite a Node-only import into a file that has to stay portable.
 compatibility_date = "2025-09-01"
 
+# The canonical endpoint. This is not cosmetic: an OAuth client asks for a
+# token whose audience is the URL it was pointed at, and the authorization
+# server only accepts audiences it recognises (ACCEPTED_RESOURCES in
+# src/lib/oauth.ts). The workers.dev hostname is not one of them, so a client
+# using it completes the whole consent flow and is then refused at the token
+# exchange with "unrecognized resource". Serving on the audience the
+# authorization server actually accepts is what makes the flow terminate.
+#
+# custom_domain = true has Cloudflare create and manage the DNS record for the
+# zone, so there is no separate record to add by hand or to forget.
+[[routes]]
+pattern = "mcp.rifts.to"
+custom_domain = true
+
 [vars]
 # The API this server talks to. Point a preview deployment at a preview Pages
 # URL by overriding it; the default is production rifts.to.

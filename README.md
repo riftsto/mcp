@@ -11,6 +11,21 @@ Point a poll at your audience by asking your AI client to do it, and check the a
 - **`get_survey_results`**: returns a survey's questions and every response.
 - **`close_survey`**: stops a survey from accepting new responses. Reopening, retitling, and editing questions stay in the rifts.to admin dashboard, not here.
 
+## Hosted, with sign-in
+
+rifts.to runs this server at `https://mcp.rifts.to/mcp`. Add it as a remote MCP
+server and your client walks an OAuth flow: it registers itself, sends you to
+rifts.to to approve, and stores the token it gets back. Nothing to paste, and
+you can revoke it later under "Connected applications" on `/account`.
+
+```bash
+claude mcp add --transport http rifts https://mcp.rifts.to/mcp
+```
+
+In Claude Desktop, add it as a custom connector with that same URL.
+
+Running it yourself, with a token you paste in, is the rest of this document.
+
 ## Install and run
 
 ```bash
