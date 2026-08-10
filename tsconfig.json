@@ -19,5 +19,10 @@
     "noEmitOnError": true,
     "types": ["node"]
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Tests live beside the code but must not reach `dist`: this package is
+  // published to npm, and shipping a test suite (and the vitest import it
+  // pulls in) to every consumer is dead weight at best. `tsconfig.test.json`
+  // type-checks them.
+  "exclude": ["src/**/*.test.ts", "src/__tests__"]
 }

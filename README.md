@@ -26,7 +26,17 @@ In Claude Desktop, add it as a custom connector with that same URL.
 
 Running it yourself, with a token you paste in, is the rest of this document.
 
-## Install and run
+## Run it yourself
+
+Not on npm yet. Until it is, clone this repository and build:
+
+```bash
+npm install
+npm run build
+node dist/stdio.js
+```
+
+Once published, this becomes:
 
 ```bash
 npx @riftsto/mcp
@@ -39,14 +49,15 @@ The server reads its configuration from two environment variables:
 
 ### Claude Desktop
 
-Add this to your `claude_desktop_config.json`:
+Add this to your `claude_desktop_config.json`, using the absolute path to your
+build:
 
 ```json
 {
   "mcpServers": {
     "rifts": {
-      "command": "npx",
-      "args": ["-y", "@riftsto/mcp"],
+      "command": "node",
+      "args": ["/path/to/rifts-mcp/dist/stdio.js"],
       "env": {
         "RIFTS_TOKEN": "your-token-here"
       }
@@ -55,10 +66,13 @@ Add this to your `claude_desktop_config.json`:
 }
 ```
 
+Once the package is on npm, `"command": "npx"` with
+`"args": ["-y", "@riftsto/mcp"]` replaces both lines.
+
 ### Claude Code
 
 ```bash
-claude mcp add rifts -e RIFTS_TOKEN=your-token-here -- npx -y @riftsto/mcp
+claude mcp add rifts -e RIFTS_TOKEN=your-token-here -- node /path/to/rifts-mcp/dist/stdio.js
 ```
 
 Add `-s user` to make it available in every project instead of just the
@@ -75,6 +89,28 @@ Token creation requires an active subscription. The token is shown once, at crea
 ## Self-hosting
 
 This server is stateless and holds no credentials of its own. Every request carries your `RIFTS_TOKEN` and goes straight to the rifts.to API; the server doesn't store it, cache it, or log it anywhere. Running your own copy, on your own machine or your own infrastructure, is a supported way to use it, and it still needs a token from a real rifts.to account with an active subscription. There's no separate self-hosting tier or discount; the token is what's paid for, not the server.
+
+## Development
+
+```bash
+npm install
+npm test          # vitest, drives the server over an in-memory transport
+npm run typecheck
+npm run build
+```
+
+The tests connect a real MCP client to the server and call the tools against a
+stub API, so a schema that rejects a valid question, or a result the SDK
+refuses to serialize, fails in CI rather than in someone's chat window.
+
+`src/server.ts` builds the server and is transport-free. `src/stdio.ts` and
+`src/worker.ts` are the two entry points, and neither contains tool logic, so
+the hosted and self-hosted paths cannot drift on what the tools do.
+
+## Security
+
+Token handling, what this server can reach, and how to report a vulnerability:
+[SECURITY.md](./SECURITY.md).
 
 ## License
 

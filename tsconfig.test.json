@@ -1,0 +1,11 @@
+{
+  // Same strictness as the build, but including the tests the build excludes.
+  // `npm run typecheck` uses this so test code is held to the same standard as
+  // shipped code, while `npm run build` still emits only the latter.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["src"],
+  "exclude": []
+}

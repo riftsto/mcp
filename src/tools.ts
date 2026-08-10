@@ -1,7 +1,17 @@
 /**
  * The four tools, and the text a model actually reads.
  *
- * Two rules shape everything here:
+ * **Descriptions say what a tool does, never how Claude should behave.** The
+ * Connectors Directory rejects descriptions that instruct the model rather
+ * than describe the tool, and the rule is a good one independent of review:
+ * a description is read in every conversation this server is connected to,
+ * so behavioural instructions in it are a standing side effect nobody asked
+ * for. Stating that an admin link is a credential is a fact about the return
+ * value. Telling Claude to ask permission before returning one is not.
+ * Naming when a tool applies ("use this to poll a room") is still a
+ * description of the tool's purpose and is fine.
+ *
+ * Two further rules shape everything here:
  *
  * 1. The input schemas must not accept a question shape rifts.to's own
  *    `validateQuestions` would reject, or the model gets a 400 it cannot fix
@@ -120,7 +130,7 @@ export function registerTools(server: McpServer, client: RiftsClient): void {
           .boolean()
           .optional()
           .describe(
-            "Include each survey's admin link. Only ask for this when the user actually wants the admin links; they are credentials."
+            "Include each survey's admin link. An admin link is a credential: anyone holding it can read every response and close the survey. Omitted by default."
           ),
         include_closed: z
           .boolean()
@@ -168,7 +178,7 @@ export function registerTools(server: McpServer, client: RiftsClient): void {
     {
       title: "Close a survey",
       description:
-        "Stop a survey from accepting new responses. The public link keeps working and shows the survey as closed, and the results stay readable with get_survey_results. Reopening is not available through this server (it can only be done from the rifts.to admin dashboard), so confirm with the user before closing a survey that is still collecting answers.",
+        "Stop a survey from accepting new responses. The public link keeps working and shows the survey as closed, and the results stay readable with get_survey_results. Closing is not reversible through this server: reopening can only be done from the rifts.to admin dashboard.",
       inputSchema: {
         id: z
           .string()
