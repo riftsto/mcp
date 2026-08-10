@@ -82,7 +82,7 @@ export default {
       if (request.method !== "GET" && request.method !== "HEAD") {
         return methodNotAllowed("GET, HEAD, OPTIONS");
       }
-      return resourceMetadata(url);
+      return resourceMetadata(url, env);
     }
 
     if (url.pathname === MCP_PATH) {
@@ -100,15 +100,22 @@ export default {
 };
 
 /**
- * RFC 9728 metadata. Everything is derived from the request URL rather than
- * baked in, so one build is correct on workers.dev and on mcp.rifts.to without
- * a config change that somebody has to remember.
+ * RFC 9728 metadata. Everything is derived rather than baked in, so one build
+ * is correct on workers.dev and on mcp.rifts.to without a config change that
+ * somebody has to remember.
+ *
+ * `authorization_servers` follows `RIFTS_API_URL` rather than being pinned to
+ * production, because the rifts.to deployment this server talks to *is* its
+ * authorization server. Pinning them apart is how a preview build ends up
+ * telling clients to go and authorize somewhere that does not know about it.
  */
-function resourceMetadata(url: URL): Response {
+function resourceMetadata(url: URL, env: Env): Response {
+  const authorizationServer = env.RIFTS_API_URL?.trim() || AUTHORIZATION_SERVER;
+
   return json(
     {
       resource: url.origin,
-      authorization_servers: [AUTHORIZATION_SERVER],
+      authorization_servers: [authorizationServer.replace(/\/$/, "")],
       scopes_supported: SCOPES,
       // OAuth 2.1 and the MCP spec both forbid a token in a query string, and
       // this server reads only the header. Saying so is not decoration: it is
