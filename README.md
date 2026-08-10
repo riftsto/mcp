@@ -1,4 +1,4 @@
-# rifts-mcp
+# rifts.to MCP server
 
 An MCP server for [rifts.to](https://rifts.to), a live audience survey tool. It lets an AI client create a survey, list the surveys on your account, read back the results, and close a survey when you're done collecting responses.
 

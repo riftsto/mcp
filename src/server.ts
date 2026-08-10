@@ -9,6 +9,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { RiftsClient } from "./client.js";
 import { registerTools } from "./tools.js";
 
+/**
+ * The protocol identifier, not the brand. Clients namespace tool names with it
+ * (`mcp__rifts__create_survey`), so it stays a bare slug: a dot in here would
+ * ride along into every tool name. `title` below is where "rifts.to" belongs.
+ */
 export const SERVER_NAME = "rifts";
 
 /** Kept in step with package.json by hand; nothing imports JSON at runtime. */
@@ -19,7 +24,7 @@ export function createServer(client: RiftsClient): McpServer {
     {
       name: SERVER_NAME,
       version: SERVER_VERSION,
-      title: "rifts.to",
+      title: "rifts.to MCP server",
     },
     {
       // Shown by clients that surface it, and the only place this server can
