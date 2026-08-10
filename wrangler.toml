@@ -1,0 +1,23 @@
+# Deployment config for the hosted MCP server (mcp.rifts.to). Only src/worker.ts
+# uses this; the npm package and its stdio entry point are unaffected by it.
+#
+# There are deliberately no secrets and no bindings here, and there should never
+# be any. This Worker forwards the caller's own bearer token to the rifts.to API
+# and holds no credential of its own, which is what keeps token validation in
+# one place and makes a compromise of this Worker worth nothing to an attacker.
+
+name = "rifts-mcp"
+main = "src/worker.ts"
+
+# The MCP SDK's web-standard transport needs Request, Response and
+# ReadableStream and nothing else, so no nodejs_compat flag. Adding one would
+# quietly invite a Node-only import into a file that has to stay portable.
+compatibility_date = "2025-09-01"
+
+[vars]
+# The API this server talks to. Point a preview deployment at a preview Pages
+# URL by overriding it; the default is production rifts.to.
+RIFTS_API_URL = "https://rifts.to"
+
+[observability]
+enabled = true
