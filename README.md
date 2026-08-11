@@ -42,6 +42,11 @@ Once published, this becomes:
 npx @riftsto/mcp
 ```
 
+Releases are published from CI with [npm provenance](https://docs.npmjs.com/generating-provenance-statements),
+so each version on npm carries a signed attestation linking it to the commit
+and workflow run that built it. Cutting a GitHub release triggers the publish;
+the tag has to match the version in `package.json` or the run fails.
+
 The server reads its configuration from two environment variables:
 
 - `RIFTS_TOKEN` (required): your personal access token.

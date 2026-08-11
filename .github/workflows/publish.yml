@@ -1,0 +1,76 @@
+name: Publish to npm
+
+# Publishing is tied to a GitHub release rather than to a push, so every
+# version on npm corresponds to a tag somebody deliberately cut, and the
+# release page is the changelog. workflow_dispatch is the escape hatch for
+# re-running a failed publish without inventing a second tag.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+# Never let two publishes race: npm will reject the second, but the failure
+# is confusing and the half-run leaves a release looking published.
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for provenance. Without it `--provenance` fails at the point
+      # of signing, after the build has already succeeded.
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          # Makes npm write an .npmrc pointing at the public registry, which
+          # is what NODE_AUTH_TOKEN below is then read against.
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci
+
+      # Publishing an untested build is how a broken release reaches people
+      # who then have to work out whether it is them or us.
+      - run: npm test
+
+      - run: npm run typecheck
+
+      # `prepublishOnly` also builds, but doing it here means a build failure
+      # is its own red step rather than buried in publish output.
+      - run: npm run build
+
+      # The tag is the only claim about what version this is, and package.json
+      # is the only thing npm actually reads. If they disagree, the release
+      # notes describe a version nobody can install. Cheaper to fail here.
+      - name: Check the tag matches package.json
+        if: github.event_name == 'release'
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::tag $GITHUB_REF_NAME implies version $TAG but package.json says $PKG"
+            exit 1
+          fi
+          echo "tag and package.json agree on $PKG"
+
+      # --provenance publishes a signed attestation tying this tarball to this
+      # commit and this workflow run. For a package that handles bearer tokens
+      # that is worth having: it lets somebody verify what they installed was
+      # built from the public source, rather than uploaded from a laptop.
+      # It only works from CI with id-token: write, which is the point.
+      #
+      # Access is declared in package.json's publishConfig rather than passed
+      # here, so a local `npm publish` behaves the same way. A scoped package
+      # defaults to restricted and would otherwise fail on a free account.
+      - name: Publish
+        run: npm publish --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
