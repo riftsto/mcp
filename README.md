@@ -1,8 +1,18 @@
 # rifts.to MCP server
 
+[![CI](https://github.com/riftsto/mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/riftsto/mcp/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
+
 An MCP server for [rifts.to](https://rifts.to), a live audience survey tool. It lets an AI client create a survey, list the surveys on your account, read back the results, and close a survey when you're done collecting responses.
 
 Point a poll at your audience by asking your AI client to do it, and check the answers the same way, without leaving the chat.
+
+```bash
+claude mcp add --transport http rifts https://mcp.rifts.to/mcp
+```
+
+That is the hosted server, and it signs you in through the browser. [Running your
+own copy](#run-it-yourself) is supported too.
 
 ## Tools
 
@@ -18,29 +28,24 @@ server and your client walks an OAuth flow: it registers itself, sends you to
 rifts.to to approve, and stores the token it gets back. Nothing to paste, and
 you can revoke it later under "Connected applications" on `/account`.
 
-```bash
-claude mcp add --transport http rifts https://mcp.rifts.to/mcp
-```
-
 In Claude Desktop, add it as a custom connector with that same URL.
 
 Running it yourself, with a token you paste in, is the rest of this document.
 
 ## Run it yourself
 
-Not on npm yet. Until it is, clone this repository and build:
+Not on npm yet, so clone this repository and build:
 
 ```bash
+git clone https://github.com/riftsto/mcp.git rifts-mcp
+cd rifts-mcp
 npm install
 npm run build
 node dist/stdio.js
 ```
 
-Once published, this becomes:
-
-```bash
-npx @riftsto/mcp
-```
+When `@riftsto/mcp` is published, `npx @riftsto/mcp` will replace all of that,
+and every `node /path/to/...` below becomes `npx -y @riftsto/mcp`.
 
 The server reads its configuration from two environment variables:
 
@@ -65,9 +70,6 @@ build:
   }
 }
 ```
-
-Once the package is on npm, `"command": "npx"` with
-`"args": ["-y", "@riftsto/mcp"]` replaces both lines.
 
 ### Claude Code
 
