@@ -1,5 +1,6 @@
 # rifts.to MCP server
 
+[![npm](https://img.shields.io/npm/v/@rifts_to/mcp)](https://www.npmjs.com/package/@rifts_to/mcp)
 [![CI](https://github.com/riftsto/mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/riftsto/mcp/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
@@ -34,7 +35,22 @@ Running it yourself, with a token you paste in, is the rest of this document.
 
 ## Run it yourself
 
-Not on npm yet, so clone this repository and build:
+```bash
+npx @rifts_to/mcp
+```
+
+Releases are published from CI with [npm provenance](https://docs.npmjs.com/generating-provenance-statements),
+so each version on npm carries a signed attestation linking it to the commit
+and workflow run that built it. You can check the one you installed:
+
+```bash
+npm audit signatures
+```
+
+Cutting a GitHub release triggers the publish; the tag has to match the version
+in `package.json` or the run fails.
+
+Building from source works too, and is the same code:
 
 ```bash
 git clone https://github.com/riftsto/mcp.git rifts-mcp
@@ -44,14 +60,6 @@ npm run build
 node dist/stdio.js
 ```
 
-When `@rifts_to/mcp` is published, `npx @rifts_to/mcp` will replace all of that,
-and every `node /path/to/...` below becomes `npx -y @rifts_to/mcp`.
-
-Releases are published from CI with [npm provenance](https://docs.npmjs.com/generating-provenance-statements),
-so each version on npm carries a signed attestation linking it to the commit
-and workflow run that built it. Cutting a GitHub release triggers the publish;
-the tag has to match the version in `package.json` or the run fails.
-
 The server reads its configuration from two environment variables:
 
 - `RIFTS_TOKEN` (required): your personal access token.
@@ -59,15 +67,14 @@ The server reads its configuration from two environment variables:
 
 ### Claude Desktop
 
-Add this to your `claude_desktop_config.json`, using the absolute path to your
-build:
+Add this to your `claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "rifts": {
-      "command": "node",
-      "args": ["/path/to/rifts-mcp/dist/stdio.js"],
+      "command": "npx",
+      "args": ["-y", "@rifts_to/mcp"],
       "env": {
         "RIFTS_TOKEN": "your-token-here"
       }
@@ -76,10 +83,13 @@ build:
 }
 ```
 
+Running from a clone instead means `"command": "node"` with
+`"args": ["/path/to/rifts-mcp/dist/stdio.js"]`.
+
 ### Claude Code
 
 ```bash
-claude mcp add rifts -e RIFTS_TOKEN=your-token-here -- node /path/to/rifts-mcp/dist/stdio.js
+claude mcp add rifts -e RIFTS_TOKEN=your-token-here -- npx -y @rifts_to/mcp
 ```
 
 Add `-s user` to make it available in every project instead of just the
