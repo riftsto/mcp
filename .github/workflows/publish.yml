@@ -20,8 +20,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # Required for provenance. Without it `--provenance` fails at the point
-      # of signing, after the build has already succeeded.
+      # This is the credential now. npm exchanges the OIDC token GitHub mints
+      # here for a short-lived publish grant, so there is no NPM_TOKEN to leak,
+      # rotate, or forget to revoke. Provenance signing needs it too.
       id-token: write
 
     steps:
@@ -29,11 +30,19 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Trusted publishing requires Node >= 22.14.0. Floor, not preference.
+          node-version: 22
           cache: npm
-          # Makes npm write an .npmrc pointing at the public registry, which
-          # is what NODE_AUTH_TOKEN below is then read against.
+          # Makes npm write an .npmrc pointing at the public registry, which is
+          # the registry npm then presents the OIDC token to.
           registry-url: https://registry.npmjs.org
+
+      # Trusted publishing also requires npm >= 11.5.1, and Node 22 ships npm
+      # 10. Skipping this does not fail loudly: npm falls back to looking for a
+      # token it does not have and reports 404 / ENEEDAUTH, which reads like a
+      # permissions problem on the package rather than a version problem in the
+      # runner. See npm/cli#9088.
+      - run: npm install -g npm@latest
 
       - run: npm ci
 
@@ -61,16 +70,20 @@ jobs:
           fi
           echo "tag and package.json agree on $PKG"
 
-      # --provenance publishes a signed attestation tying this tarball to this
-      # commit and this workflow run. For a package that handles bearer tokens
-      # that is worth having: it lets somebody verify what they installed was
-      # built from the public source, rather than uploaded from a laptop.
-      # It only works from CI with id-token: write, which is the point.
+      # No token and no --provenance flag, and both absences are the point.
+      #
+      # npm authenticates this publish by exchanging the workflow's OIDC token
+      # with the registry, against a trusted publisher registered on the package
+      # that names this repository and this workflow file. Renaming this file or
+      # moving the job to another repo breaks publishing until the publisher is
+      # re-registered, which is the trade for holding no long-lived credential.
+      #
+      # Provenance is emitted automatically under trusted publishing, so the
+      # signed attestation tying this tarball to this commit survives the switch.
+      # Passing --provenance here would be redundant, not additive.
       #
       # Access is declared in package.json's publishConfig rather than passed
       # here, so a local `npm publish` behaves the same way. A scoped package
       # defaults to restricted and would otherwise fail on a free account.
       - name: Publish
-        run: npm publish --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish
