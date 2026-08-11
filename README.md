@@ -44,8 +44,8 @@ npm run build
 node dist/stdio.js
 ```
 
-When `@riftsto/mcp` is published, `npx @riftsto/mcp` will replace all of that,
-and every `node /path/to/...` below becomes `npx -y @riftsto/mcp`.
+When `@rifts_to/mcp` is published, `npx @rifts_to/mcp` will replace all of that,
+and every `node /path/to/...` below becomes `npx -y @rifts_to/mcp`.
 
 Releases are published from CI with [npm provenance](https://docs.npmjs.com/generating-provenance-statements),
 so each version on npm carries a signed attestation linking it to the commit
