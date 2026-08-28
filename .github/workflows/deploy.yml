@@ -1,0 +1,151 @@
+name: Deploy mcp.rifts.to
+
+# The hosted Worker had no automated deploy at all until this file, and the
+# gap was not theoretical: on 2026-08-28 the npm package went to 0.3.0 with ten
+# tools while mcp.rifts.to kept serving a build from 03:18Z with four, because
+# `npm publish` and `wrangler deploy` are unrelated paths and only the first
+# was wired up. Every connector using the hosted URL — which is what the README
+# leads with — was on the old surface until somebody deployed by hand.
+#
+# **Deploys on push to main rather than on release, and that is the point.**
+# Tying it to a release would leave exactly the same gap for any merge that is
+# not released: main moves, the Worker does not, and nothing says so. A release
+# is cut from a commit that is already on main, so this trigger covers releases
+# too. The consequence is that mcp.rifts.to can be ahead of npm's latest, which
+# is correct — the Worker is a service, the package is a versioned artifact,
+# and they answer to different clocks.
+on:
+  push:
+    branches: [main]
+  # Re-running a deploy without an empty commit: recovering a failed run,
+  # or forcing the live Worker back into step after a manual `wrangler deploy`.
+  workflow_dispatch:
+
+# Two deploys of the same Worker racing is a coin flip over which one wins,
+# and the loser leaves no trace that it lost.
+concurrency:
+  group: worker-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # ci.yml runs these too, on this same commit. Repeating them is
+      # deliberate: a deploy must not trust another workflow's verdict, since
+      # nothing here can observe whether that workflow ran, passed, or was
+      # skipped by a path filter somebody adds later.
+      - run: npm test
+
+      - run: npm run typecheck
+
+      # Fails early, and says which value is missing.
+      #
+      # This repo held no secrets and no variables when this workflow was
+      # written, so the first run without this step would have reached
+      # `wrangler deploy` and failed on an authentication error that reads like
+      # a Cloudflare permissions problem rather than "nobody has set this yet".
+      # That is the same shape of confusion the npm trusted-publisher switch
+      # produced — a workflow describing a configuration that had never been
+      # created, failing with a message pointing somewhere else entirely.
+      #
+      # Both values already exist in riftsto/instant-survey and are the same
+      # account. CLOUDFLARE_ACCOUNT_ID is a variable rather than a secret
+      # because it is not a credential: it appears in every dashboard URL.
+      - name: Check Cloudflare credentials are configured
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          missing=0
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::secret CLOUDFLARE_API_TOKEN is not set on this repository. Set it with: pbpaste | gh secret set CLOUDFLARE_API_TOKEN --repo riftsto/mcp"
+            missing=1
+          fi
+          if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::variable CLOUDFLARE_ACCOUNT_ID is not set on this repository. Set it with: gh variable set CLOUDFLARE_ACCOUNT_ID --repo riftsto/mcp --body <account id>"
+            missing=1
+          fi
+          [ "$missing" -eq 0 ] || exit 1
+          echo "Cloudflare credentials present."
+
+      # No build step: wrangler bundles src/worker.ts itself, and `npm run
+      # build` (tsc) exists for the npm package's dist/, which this Worker does
+      # not consume. Deliberately not path-filtered either — the Worker is
+      # stateless, one server object per request with no sessions or streams to
+      # drop, so a redundant deploy costs nothing while a skipped one costs the
+      # drift this file exists to prevent.
+      - name: Deploy
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+
+      # A check immediately after deploy can still reach the previous version
+      # at some edge.
+      - name: Wait for propagation
+        run: sleep 15
+
+      # Everything below is unauthenticated on purpose. Asserting that ten
+      # tools are live would need a production API token in CI, and this Worker
+      # exists precisely so that no long-lived credential sits anywhere near
+      # it — it forwards the caller's own bearer token and holds nothing.
+      #
+      # So the smoke check asserts the contract a client depends on before it
+      # has a token at all: the 401 challenge that makes an OAuth client go and
+      # get one. A Worker that boots but answers that wrongly looks healthy
+      # from the outside while no connector can ever finish signing in.
+      - name: Smoke check the live endpoint
+        run: |
+          set -euo pipefail
+
+          echo "--- unauthenticated tools/list must be refused with a challenge"
+          headers="$(curl -sS -m 15 -D - -o /dev/null -X POST https://mcp.rifts.to/mcp \
+            -H 'Content-Type: application/json' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')"
+
+          echo "$headers" | grep -qiE '^HTTP/[0-9.]+ 401' || {
+            echo "::error::expected 401 from an unauthenticated tools/list"
+            echo "$headers"
+            exit 1
+          }
+
+          # resource_metadata is the parameter RFC 9728 discovery keys on. A
+          # challenge without it sends a client looking for an authorization
+          # server it has no way to find.
+          echo "$headers" | grep -qi 'www-authenticate:.*resource_metadata="https://mcp.rifts.to/.well-known/oauth-protected-resource"' || {
+            echo "::error::the 401 is missing its resource_metadata challenge"
+            echo "$headers"
+            exit 1
+          }
+
+          echo "--- the metadata document it points at must resolve"
+          metadata="$(curl -sS -m 15 https://mcp.rifts.to/.well-known/oauth-protected-resource)"
+          echo "$metadata"
+
+          # The audience must be the host the client was pointed at: the
+          # authorization server only accepts resources it recognises, so a
+          # wrong value here completes consent and then fails the token
+          # exchange with "unrecognized resource".
+          echo "$metadata" | grep -q '"resource":"https://mcp.rifts.to"' || {
+            echo "::error::protected-resource metadata does not name https://mcp.rifts.to"
+            exit 1
+          }
+          echo "$metadata" | grep -q '"authorization_servers":\["https://rifts.to"\]' || {
+            echo "::error::protected-resource metadata does not point at https://rifts.to"
+            exit 1
+          }
+
+          echo "Smoke check passed."
