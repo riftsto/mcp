@@ -19,7 +19,7 @@
  * long-lived `McpServer` would have to hold a token from some earlier request.
  * Building the server and transport per request makes that impossible by
  * construction. It costs a session: there is no `Mcp-Session-Id`, no `GET /mcp`
- * notification stream, and no resumability. All four tools are plain
+ * notification stream, and no resumability. Every tool is plain
  * request/response, so nothing here has a use for any of that.
  *
  * **No secrets, no bindings.** The Worker never sees a credential of its own.
@@ -141,7 +141,7 @@ async function handleMcp(request: Request, env: Env, url: URL): Promise<Response
   //
   // The reactive check below only trips when a tool actually calls the API, and
   // `initialize` and `tools/list` never do. Without this, a request carrying a
-  // revoked or expired token got a cheerful 200 listing four tools, so a client
+  // revoked or expired token got a cheerful 200 listing every tool, so a client
   // sat there looking connected and only discovered the problem on the first
   // tool call, as an error message rather than as the 401 that would have made
   // it refresh. For an OAuth client the 401 *is* the signal, so it has to come

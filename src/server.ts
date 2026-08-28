@@ -17,7 +17,7 @@ import { registerTools } from "./tools.js";
 export const SERVER_NAME = "rifts";
 
 /** Kept in step with package.json by hand; nothing imports JSON at runtime. */
-export const SERVER_VERSION = "0.2.0";
+export const SERVER_VERSION = "0.3.0";
 
 export function createServer(client: RiftsClient): McpServer {
   const server = new McpServer(
@@ -30,7 +30,7 @@ export function createServer(client: RiftsClient): McpServer {
       // Shown by clients that surface it, and the only place this server can
       // explain the account/subscription requirement before a tool call fails.
       instructions:
-        "Create and read live audience surveys on rifts.to. create_survey returns a public link to share with respondents and an admin link that shows results in real time. Every call uses the account that owns the configured RIFTS_TOKEN, and requires that account to have an active rifts.to subscription.",
+        "Create, run and read live audience surveys on rifts.to. create_survey returns a public link to share with respondents and an admin link that shows results in real time; a survey can also be reopened, recolored, edited, archived, or launched again from a saved template. A survey left without a theme takes the palette the account last saved on rifts.to, which is usually the creator's own brand. Every call uses the account that owns the configured RIFTS_TOKEN, and requires that account to have an active rifts.to subscription.",
     }
   );
 
@@ -40,12 +40,22 @@ export function createServer(client: RiftsClient): McpServer {
 }
 
 export { RiftsClient, RiftsApiError, DEFAULT_BASE_URL } from "./client.js";
+export { THEME_PRESETS } from "./client.js";
 export type {
   CreateSurveyInput,
+  CreateTemplateInput,
   CreatedSurvey,
+  CustomTheme,
+  LaunchTemplateInput,
+  LaunchedSurvey,
   Question,
   QuestionInput,
   RiftsClientOptions,
   SurveyResults,
   SurveySummary,
+  SurveyTheme,
+  Template,
+  ThemePreset,
+  UpdateSurveyInput,
+  UpdatedSurvey,
 } from "./client.js";
