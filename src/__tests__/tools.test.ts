@@ -200,6 +200,93 @@ describe("create_survey", () => {
     expect((res as { isError?: boolean }).isError).toBe(true);
   });
 
+  it("accepts an optional requirement and a conditional one, on all three question types, unchanged", async () => {
+    // Omitting `requirement` entirely (the third question here) is the shape
+    // every existing caller sends — the regression that matters most is that
+    // it still creates exactly as it did before this field existed.
+    const { client, calls } = stubClient();
+    const { mcp } = await connect(client);
+
+    const questions = [
+      {
+        type: "multiple_choice",
+        text: "Did you attend?",
+        options: ["Yes", "No"],
+      },
+      {
+        type: "free_text",
+        text: "What kept you away?",
+        requirement: {
+          mode: "conditional",
+          when: { op: "all", conditions: [{ questionIndex: 0, values: ["No"] }] },
+        },
+      },
+      {
+        type: "rating",
+        text: "How was it?",
+        requirement: { mode: "optional" },
+      },
+    ];
+
+    await mcp.callTool({
+      name: "create_survey",
+      arguments: { title: "T", questions },
+    });
+
+    const sent = firstCall(calls).args[0] as { questions: unknown[] };
+    expect(sent.questions[0]).not.toHaveProperty("requirement");
+    expect(sent.questions[1]).toMatchObject(questions[1] as object);
+    expect(sent.questions[2]).toMatchObject({
+      requirement: { mode: "optional" },
+      scale: { min: 1, max: 10 },
+    });
+  });
+
+  it("rejects a requirement mode the API doesn't have", async () => {
+    const { client } = stubClient();
+    const { mcp } = await connect(client);
+
+    const res = await mcp.callTool({
+      name: "create_survey",
+      arguments: {
+        title: "T",
+        questions: [
+          { type: "free_text", text: "Why?", requirement: { mode: "sometimes" } },
+        ],
+      },
+    });
+    expect((res as { isError?: boolean }).isError).toBe(true);
+  });
+
+  it("lets a forward reference reach the API rather than guessing at the rule itself", async () => {
+    // Whether `questionIndex` points strictly earlier depends on every other
+    // question in the array, which the server already checks. The schema
+    // only validates this question's own shape (a non-negative index), and
+    // leaves "earlier than what" to rifts.to's `validateQuestions` — see
+    // client.test.ts for the friendly message that 400 turns into.
+    const { client, calls } = stubClient();
+    const { mcp } = await connect(client);
+
+    await mcp.callTool({
+      name: "create_survey",
+      arguments: {
+        title: "T",
+        questions: [
+          {
+            type: "free_text",
+            text: "Why?",
+            requirement: {
+              mode: "conditional",
+              when: { op: "all", conditions: [{ questionIndex: 1, values: ["No"] }] },
+            },
+          },
+          { type: "multiple_choice", text: "Did you attend?", options: ["Yes", "No"] },
+        ],
+      },
+    });
+    expect(calls.length).toBe(1);
+  });
+
   it("rejects an empty question list", async () => {
     const { client } = stubClient();
     const { mcp } = await connect(client);
@@ -297,6 +384,48 @@ describe("get_survey_results", () => {
     // A question two of three respondents skipped lists only the real answers.
     expect(text).toContain("yes");
     expect(text).toContain("no");
+  });
+
+  it("reads a partly-answered optional question as skipped, not missing", async () => {
+    const { client } = stubClient({
+      getSurveyResults: (() =>
+        Promise.resolve({
+          id: "a",
+          title: "Lunch",
+          status: "open",
+          url: "https://rifts.to/en/s/a",
+          created_at: "2026-08-10T00:00:00.000Z",
+          expires_at: null,
+          response_count: 3,
+          questions: [
+            {
+              index: 0,
+              type: "multiple_choice",
+              text: "Did you attend?",
+              options: ["Yes", "No"],
+            },
+            {
+              index: 1,
+              type: "free_text",
+              text: "What kept you away?",
+              requirement: {
+                mode: "conditional",
+                when: { op: "all", conditions: [{ questionIndex: 0, values: ["No"] }] },
+              },
+            },
+          ],
+          responses: [
+            { id: "r1", submitted_at: "", answers: { 0: "Yes" } },
+            { id: "r2", submitted_at: "", answers: { 0: "No", 1: "Travel" } },
+            { id: "r3", submitted_at: "", answers: { 0: "No", 1: "Budget" } },
+          ],
+        })) as unknown as RiftsClient["getSurveyResults"],
+    });
+    const { mcp } = await connect(client);
+
+    const text = textOf(await mcp.callTool({ name: "get_survey_results", arguments: { id: "a" } }));
+    expect(text).toContain("(required only for some respondents)");
+    expect(text).toMatch(/1 response skipped this question — it wasn't required for them/);
   });
 
   it("says nobody has answered rather than rendering empty sections", async () => {

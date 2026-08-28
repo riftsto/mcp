@@ -46,6 +46,45 @@ const RATING_SCALE = { min: 1, max: 10 } as const;
 /** Matches isValidCustomSlug in src/lib/slugs.ts. */
 const CUSTOM_SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
+const conditionSchema = z.object({
+  questionIndex: z
+    .number()
+    .int()
+    .min(0)
+    .describe(
+      "The 0-based position, in this same `questions` array, of the multiple-choice question this condition reads — questions have no separate id or index field, position is the only way to refer to one. Must be strictly less than the position of the question this condition belongs to: a condition can only point at an earlier question, never itself or one that comes later. That rule is also why a dependency cycle can never be expressed."
+    ),
+  values: z
+    .array(z.string().min(1))
+    .min(1)
+    .describe(
+      "One or more strings, each matching one of the trigger question's `options` exactly. The condition is met if the respondent's answer is any of these (an OR within this one condition)."
+    ),
+});
+
+const requirementSchema = z
+  .discriminatedUnion("mode", [
+    z.object({ mode: z.literal("optional") }),
+    z.object({
+      mode: z.literal("conditional"),
+      when: z.object({
+        op: z
+          .enum(["all", "any"])
+          .describe(
+            '"all" requires every condition to match (AND); "any" requires at least one (OR).'
+          ),
+        conditions: z
+          .array(conditionSchema)
+          .min(1)
+          .max(5)
+          .describe("1 to 5 conditions, combined by `op`."),
+      }),
+    }),
+  ])
+  .describe(
+    "Whether an answer to this question is required. Omit this field entirely and the question is required, same as every question has always been — omitting it changes nothing for an existing caller. `optional` lets the respondent skip it outright. `conditional` requires an answer only when `when` matches the respondent's answer(s) to an earlier multiple-choice question; the rest of the time it is optional. Neither mode ever hides the question — this is not branching or skip logic, the question is always shown to every respondent, and only whether an answer is required changes. A question that is not currently required renders with an \"Optional\" marker that appears and disappears live as the trigger question is answered."
+  );
+
 const questionSchema = z
   .discriminatedUnion("type", [
     z.object({
@@ -54,11 +93,15 @@ const questionSchema = z
       options: z
         .array(z.string().min(1))
         .min(1)
-        .describe("The choices. Respondents pick exactly one."),
+        .describe(
+          "The choices. Respondents pick exactly one. Also the only values a later question's conditional `requirement` can name in `values` — and the only questions a later `requirement` can point at, since only multiple_choice questions can trigger one."
+        ),
+      requirement: requirementSchema.optional(),
     }),
     z.object({
       type: z.literal("free_text"),
       text: z.string().min(1).describe("The question, as the respondent reads it."),
+      requirement: requirementSchema.optional(),
     }),
     z.object({
       type: z.literal("rating"),
@@ -66,9 +109,12 @@ const questionSchema = z
         .string()
         .min(1)
         .describe("The question, as the respondent reads it. Answered on a 1-10 scale."),
+      requirement: requirementSchema.optional(),
     }),
   ])
-  .describe("A single question. Questions are answered in the order given.");
+  .describe(
+    "A single question. Questions are answered in the order given, and that order is also what a `requirement.when.questionIndex` elsewhere in this array refers to."
+  );
 
 /** Registers every tool on `server`. Split out so server.ts stays a wiring file. */
 export function registerTools(server: McpServer, client: RiftsClient): void {
@@ -77,7 +123,7 @@ export function registerTools(server: McpServer, client: RiftsClient): void {
     {
       title: "Create a survey",
       description:
-        "Create a live audience survey on rifts.to and get back the two links that run it: a public URL to share with the audience (anyone with the link can answer, no account or sign-in needed) and an admin URL that shows the results updating in real time. Questions can be multiple choice, free text, or a 1-10 rating, and are answered in the order given. Use this whenever someone wants to poll a room, run a quick vote, or collect open-ended feedback. The survey is open for responses immediately.",
+        "Create a live audience survey on rifts.to and get back the two links that run it: a public URL to share with the audience (anyone with the link can answer, no account or sign-in needed) and an admin URL that shows the results updating in real time. Questions can be multiple choice, free text, or a 1-10 rating, and are answered in the order given. Any question can be made optional, or required only when an earlier multiple-choice answer matches a condition — see each question's `requirement` field; every question stays visible either way. Use this whenever someone wants to poll a room, run a quick vote, or collect open-ended feedback. The survey is open for responses immediately.",
       inputSchema: {
         title: z
           .string()
@@ -155,7 +201,7 @@ export function registerTools(server: McpServer, client: RiftsClient): void {
     {
       title: "Read survey results",
       description:
-        "Read the answers to one of your surveys. Returns the questions with a summary of how they were answered: the tally per option for multiple choice, the average for ratings, and every free-text answer in full, plus the total response count and the survey's current status. Responses carry no respondent identity: rifts.to never records who answered, so results cannot be attributed to a person.",
+        "Read the answers to one of your surveys. Returns the questions with a summary of how they were answered: the tally per option for multiple choice, the average for ratings, and every free-text answer in full, plus the total response count and the survey's current status. A question marked optional or conditionally required can have fewer answers than the survey has responses; that's respondents skipping a question that wasn't required for them, not missing or lost data, and the summary says so. Responses carry no respondent identity: rifts.to never records who answered, so results cannot be attributed to a person.",
       inputSchema: {
         id: z
           .string()
@@ -265,10 +311,35 @@ function formatResults(results: SurveyResults): string {
       .map((r) => r.answers[String(question.index)])
       .filter((a): a is string | number | string[] => a !== undefined && a !== null && a !== "");
 
-    return [`Q${question.index + 1}. ${question.text}`, ...summarise(question, answers)].join("\n");
+    const label = requirementLabel(question.requirement);
+    const lines = [
+      `Q${question.index + 1}. ${question.text}${label ? ` (${label})` : ""}`,
+      ...summarise(question, answers),
+    ];
+
+    // Only a question that could ever be skipped gets this line: a question
+    // with no `requirement` is always required, so a shortfall there would be
+    // a real anomaly rather than the expected shape of optional answers.
+    const skipped = results.response_count - answers.length;
+    if (question.requirement && skipped > 0) {
+      lines.push(
+        `  (${plural(skipped, "response")} skipped this question — it wasn't required for them)`
+      );
+    }
+
+    return lines.join("\n");
   });
 
   return [header.join("\n"), ...blocks].join("\n\n");
+}
+
+/**
+ * A short, factual label — never "hidden" or "skipped" wording, since the
+ * question is shown to every respondent regardless of `requirement`.
+ */
+function requirementLabel(requirement: Question["requirement"]): string | undefined {
+  if (!requirement) return undefined;
+  return requirement.mode === "optional" ? "optional" : "required only for some respondents";
 }
 
 function summarise(

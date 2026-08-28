@@ -22,6 +22,30 @@ own copy](#run-it-yourself) is supported too.
 - **`get_survey_results`**: returns a survey's questions and every response.
 - **`close_survey`**: stops a survey from accepting new responses. Reopening, retitling, and editing questions stay in the rifts.to admin dashboard, not here.
 
+### Optional and conditional questions
+
+Every question defaults to required, exactly as it always has. A question can opt out of that with a `requirement` field:
+
+```json
+{ "type": "free_text", "text": "Anything else?",
+  "requirement": { "mode": "optional" } }
+```
+
+```json
+{ "type": "free_text", "text": "What kept you away?",
+  "requirement": {
+    "mode": "conditional",
+    "when": {
+      "op": "all",
+      "conditions": [{ "questionIndex": 0, "values": ["No"] }]
+    }
+  } }
+```
+
+`questionIndex` is the 0-based position of an earlier question in the same `questions` array — questions have no separate id, so position is the only way to point at one — and it must name a `multiple_choice` question, since only those have a fixed set of `options` for `values` to match against. `op` is `"all"` for AND or `"any"` for OR across `conditions`.
+
+Either mode changes only whether an answer is *required*, never whether the question is *shown*: a conditional question is always visible to every respondent, and just carries an "Optional" marker when it isn't currently required for them. This is not branching or skip logic.
+
 ## Hosted, with sign-in
 
 rifts.to runs this server at `https://mcp.rifts.to/mcp`. Add it as a remote MCP

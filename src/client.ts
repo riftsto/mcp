@@ -16,15 +16,55 @@
 /** Public rifts.to. Overridable so a self-hoster can point at their own deploy. */
 export const DEFAULT_BASE_URL = "https://rifts.to";
 
+/**
+ * Whether an answer is required. Absent (the historical default, and still
+ * what every existing survey means) is "always required". `optional` lets
+ * the respondent skip the question outright; `conditional` requires it only
+ * when an earlier multiple-choice answer matches `when`, and is optional
+ * otherwise. Neither mode hides the question — see the note on `when` below.
+ */
+export type Requirement = RequirementOptional | RequirementConditional;
+
+export interface RequirementOptional {
+  mode: "optional";
+}
+
+export interface RequirementConditional {
+  mode: "conditional";
+  when: ConditionGroup;
+}
+
+export interface ConditionGroup {
+  /** "all" is AND across `conditions`; "any" is OR. */
+  op: "all" | "any";
+  /** 1–5 conditions. */
+  conditions: Condition[];
+}
+
+export interface Condition {
+  /**
+   * 0-based position, in this same request's `questions` array, of the
+   * multiple-choice question this condition reads. Must be strictly less
+   * than the position of the question the condition belongs to — the server
+   * rejects anything else, which is also what makes a dependency cycle
+   * impossible to express.
+   */
+  questionIndex: number;
+  /** Matched by exact string equality against the trigger's `options`; OR'd. */
+  values: string[];
+}
+
 export interface MultipleChoiceQuestionInput {
   type: "multiple_choice";
   text: string;
   options: string[];
+  requirement?: Requirement;
 }
 
 export interface FreeTextQuestionInput {
   type: "free_text";
   text: string;
+  requirement?: Requirement;
 }
 
 export interface RatingQuestionInput {
@@ -32,6 +72,7 @@ export interface RatingQuestionInput {
   text: string;
   /** Always 1–10 — see the note on RATING_SCALE in tools.ts. */
   scale: { min: number; max: number };
+  requirement?: Requirement;
 }
 
 /** A question as sent to the API. No `index`: the server reindexes on write. */
@@ -232,6 +273,11 @@ async function toApiError(response: Response): Promise<RiftsApiError> {
   const { error, code } = await readErrorBody(response);
 
   switch (response.status) {
+    case 400: {
+      const readable = requirementErrorMessage(error);
+      return new RiftsApiError(readable ?? `rifts.to rejected the request (400)${suffix(error)}`, 400, code);
+    }
+
     case 401:
       return new RiftsApiError(
         "rifts.to rejected the token (401). Check RIFTS_TOKEN: it may be mistyped, revoked, or from a different rifts.to deployment.",
@@ -291,6 +337,44 @@ async function readErrorBody(
   } catch {
     return {};
   }
+}
+
+/**
+ * `validateQuestions` on the server answers a bad `requirement` with one of a
+ * fixed set of English strings. Turned into wording a model can act on
+ * instead of surfacing the validator's own vocabulary ("condition group",
+ * "trigger") verbatim. Returns `undefined` for a 400 this isn't — some other
+ * validation failure, or none of these rules applying — so the caller falls
+ * back to the generic message.
+ */
+function requirementErrorMessage(error?: string): string | undefined {
+  if (!error) return undefined;
+
+  const badMode = /^invalid requirement mode: (.+)$/.exec(error);
+  if (badMode) {
+    return `requirement.mode must be "optional" or "conditional", not "${badMode[1]}".`;
+  }
+
+  const badOption = /^a condition names an option that does not exist: (.+)$/.exec(error);
+  if (badOption) {
+    return `a condition's values must exactly match one of the trigger question's options; "${badOption[1]}" is not one of them.`;
+  }
+
+  const fixed: Record<string, string> = {
+    "a condition group must combine with all or any":
+      'when.op must be "all" (every condition must match) or "any" (at least one must match).',
+    "a conditional question needs at least one condition":
+      "a conditional requirement's when.conditions must have at least one condition.",
+    "a question may have at most 5 conditions": "when.conditions can have at most 5 conditions.",
+    "a condition must point at an earlier question":
+      "a condition's questionIndex must be the position of a question earlier in the questions array — it can't point at itself or at a later question.",
+    "a condition's trigger must be a multiple choice question":
+      "a condition's questionIndex must point at a multiple_choice question; free_text and rating questions can't trigger one.",
+    "a condition must name at least one option":
+      "a condition's values must list at least one of the trigger question's options.",
+  };
+
+  return fixed[error];
 }
 
 const suffix = (error?: string) => (error ? `: ${error}` : "");
