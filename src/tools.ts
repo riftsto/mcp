@@ -156,7 +156,7 @@ export function registerTools(server: McpServer, client: RiftsClient): void {
     {
       title: "Create a survey",
       description:
-        "Create a live audience survey on rifts.to and get back the two links that run it: a public URL to share with the audience (anyone with the link can answer, no account or sign-in needed) and an admin URL that shows the results updating in real time. Questions can be multiple choice, free text, or a 1-10 rating, and are answered in the order given. Any question can be made optional, or required only when an earlier multiple-choice answer matches a condition — see each question's `requirement` field; every question stays visible either way. Use this whenever someone wants to poll a room, run a quick vote, or collect open-ended feedback. The survey is open for responses immediately.",
+        "Create a live audience survey on rifts.to and get back the two links that run it: a public URL to share with the audience (anyone with the link can answer, no account or sign-in needed) and an admin URL that shows the results updating in real time. Questions can be multiple choice, free text, or a 1-10 rating, and are answered in the order given. Any question can be made optional, or required only when an earlier multiple-choice answer matches a condition — see each question's `requirement` field; every question stays visible either way. The page respondents see can carry the account's own colors, or a palette named in `theme`. Use this whenever someone wants to poll a room, run a quick vote, or collect open-ended feedback. The survey is open for responses immediately.",
       inputSchema: {
         title: z
           .string()
