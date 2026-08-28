@@ -17,7 +17,7 @@ import { registerTools } from "./tools.js";
 export const SERVER_NAME = "rifts";
 
 /** Kept in step with package.json by hand; nothing imports JSON at runtime. */
-export const SERVER_VERSION = "0.1.0";
+export const SERVER_VERSION = "0.2.0";
 
 export function createServer(client: RiftsClient): McpServer {
   const server = new McpServer(
