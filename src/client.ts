@@ -167,6 +167,13 @@ export interface SurveyResults {
   created_at: string;
   expires_at: string | null;
   url: string;
+  /**
+   * The palette the respondent page is currently wearing, `"default"` when it
+   * has none. Reported so a caller can read a survey's colors, change one
+   * thing and hand the rest straight back to `updateSurvey` — a write-only
+   * theme is a round trip nobody can complete.
+   */
+  theme: SurveyTheme;
   questions: Question[];
   response_count: number;
   responses: SurveyResponseRow[];
