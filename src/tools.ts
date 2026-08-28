@@ -27,12 +27,17 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { THEME_PRESETS } from "./client.js";
 import type {
+  LaunchTemplateInput,
   Question,
   QuestionInput,
   RiftsClient,
   SurveyResults,
   SurveySummary,
+  SurveyTheme,
+  Template,
+  UpdateSurveyInput,
 } from "./client.js";
 
 /**
@@ -45,6 +50,34 @@ const RATING_SCALE = { min: 1, max: 10 } as const;
 
 /** Matches isValidCustomSlug in src/lib/slugs.ts. */
 const CUSTOM_SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+/** Matches HEX_RE in src/lib/palette.ts. Six digits, always with the hash. */
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+
+/**
+ * A survey's palette. Kept out of `create_survey`'s required fields on
+ * purpose: with no `theme`, rifts.to paints the survey in whatever palette the
+ * account last saved in the browser, so a default sent from here would quietly
+ * override a creator's brand with the house colors every time a model made a
+ * survey for them.
+ */
+const themeSchema = z
+  .union([
+    z.enum(THEME_PRESETS),
+    z.object({
+      primary: z
+        .string()
+        .regex(HEX_COLOR, "a 6-digit hex color like #7c5cfa")
+        .describe("The accent color: buttons, links, the selected option."),
+      background: z
+        .string()
+        .regex(HEX_COLOR, "a 6-digit hex color like #09090e")
+        .describe("The page background. rifts.to derives text and surface colors from the pair."),
+    }),
+  ])
+  .describe(
+    'The colors respondents see. Either one of the presets — "sunset", "ocean", "forest", "rose", "slate" — or your own {primary, background} pair of 6-digit hex colors. "default" is the rifts.to house palette and clears any color a survey already has. Only the respondent page is themed; the results dashboard is not.'
+  );
 
 const conditionSchema = z.object({
   questionIndex: z
@@ -140,15 +173,21 @@ export function registerTools(server: McpServer, client: RiftsClient): void {
           .describe(
             "Optional custom link, e.g. 'standup-mood' for rifts.to/en/s/standup-mood. Omit it and rifts.to picks a readable three-word one. Fails if the name is already taken."
           ),
+        theme: themeSchema
+          .optional()
+          .describe(
+            'Optional colors for the respondent page. Omit it and the survey uses the palette this account last saved on rifts.to, which is usually the creator\'s own brand. Send "default" to get the rifts.to house colors instead.'
+          ),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
-    async ({ title, questions, slug }) =>
+    async ({ title, questions, slug, theme }) =>
       run(async () => {
         const survey = await client.createSurvey({
           title,
           questions: questions.map(toQuestionInput),
           ...(slug ? { slug } : {}),
+          ...(theme ? { theme } : {}),
         });
 
         return result(
@@ -159,6 +198,7 @@ export function registerTools(server: McpServer, client: RiftsClient): void {
             `Watch the results here: ${survey.admin_url}`,
             ``,
             `Survey id: ${survey.id} (use it with get_survey_results and close_survey).`,
+            ...themeLine(survey.theme),
           ].join("\n"),
           survey as unknown as Record<string, unknown>
         );
@@ -224,7 +264,7 @@ export function registerTools(server: McpServer, client: RiftsClient): void {
     {
       title: "Close a survey",
       description:
-        "Stop a survey from accepting new responses. The public link keeps working and shows the survey as closed, and the results stay readable with get_survey_results. Closing is not reversible through this server: reopening can only be done from the rifts.to admin dashboard.",
+        "Stop a survey from accepting new responses. The public link keeps working and shows the survey as closed, and the results stay readable with get_survey_results. reopen_survey undoes it, unless the survey has passed its expiry date.",
       inputSchema: {
         id: z
           .string()
@@ -237,11 +277,234 @@ export function registerTools(server: McpServer, client: RiftsClient): void {
       run(async () => {
         const closed = await client.closeSurvey(id);
         return result(
-          `Closed "${closed.id}". It no longer accepts responses; the results are still readable with get_survey_results.`,
+          `Closed "${closed.id}". It no longer accepts responses; the results are still readable with get_survey_results, and reopen_survey puts it back.`,
           closed as unknown as Record<string, unknown>
         );
       })
   );
+  server.registerTool(
+    "reopen_survey",
+    {
+      title: "Reopen a survey",
+      description:
+        "Let a closed survey accept responses again. Answers already collected are kept, and the same public link starts working again. A survey that has passed its expiry date cannot be reopened this way: the API refuses it rather than reporting a success that would change nothing, and clearing an expiry is done from the rifts.to admin dashboard.",
+      inputSchema: {
+        id: z.string().min(1).describe("The survey id, e.g. 'fuzzy-sleepy-tornado'."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ id }) =>
+      run(async () => {
+        const survey = await client.reopenSurvey(id);
+        return result(
+          `Reopened "${survey.id}". It is taking responses again on the same link.`,
+          survey as unknown as Record<string, unknown>
+        );
+      })
+  );
+
+  server.registerTool(
+    "update_survey",
+    {
+      title: "Change a survey's questions or colors",
+      description:
+        "Change a survey that already exists: its colors, its questions, or both. Send only what should change. Once people have started answering, the question list can gain questions but cannot lose them, reorder them, change their types, or rename a multiple-choice option — answers are stored by position and by the option's exact text, so those edits would orphan real answers, and the call is refused with an explanation. The survey's title cannot be changed here or anywhere else on rifts.to.",
+      inputSchema: {
+        id: z.string().min(1).describe("The survey id, e.g. 'fuzzy-sleepy-tornado'."),
+        theme: themeSchema.optional().describe("New colors for the respondent page."),
+        questions: z
+          .array(questionSchema)
+          .min(1)
+          .optional()
+          .describe(
+            "The complete new question list, replacing the old one — not just the questions being added. Send the existing questions first, unchanged and in their original order, then any new ones after them."
+          ),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async ({ id, theme, questions }) =>
+      run(async () => {
+        const patch: UpdateSurveyInput = {
+          ...(theme ? { theme } : {}),
+          ...(questions ? { questions: questions.map(toQuestionInput) } : {}),
+        };
+
+        // Checked here rather than in the schema because `registerTool` takes a
+        // shape rather than an object schema, so there is no `.refine` to hang
+        // this on. The API answers 400 for the same case; catching it first
+        // saves a call against the caller's rate limit.
+        if (Object.keys(patch).length === 0) {
+          throw new Error("nothing to change: send a theme, a questions list, or both.");
+        }
+
+        const updated = await client.updateSurvey(id, patch);
+
+        return result(
+          [
+            `Updated "${updated.id}".`,
+            ...(patch.questions ? [`It now has ${plural(patch.questions.length, "question")}.`] : []),
+            ...themeLine(updated.theme),
+          ].join("\n"),
+          updated as unknown as Record<string, unknown>
+        );
+      })
+  );
+
+  server.registerTool(
+    "archive_survey",
+    {
+      title: "Archive a survey",
+      description:
+        "Hide a survey from this account's list of surveys. Archiving is a tidying action only: the survey keeps running, its public link still works, people can still answer it, and its results stay readable with get_survey_results. Use close_survey to actually stop responses. Archiving something already archived is not an error, and `restore` puts it back in the list.",
+      inputSchema: {
+        id: z.string().min(1).describe("The survey id, e.g. 'fuzzy-sleepy-tornado'."),
+        restore: z
+          .boolean()
+          .optional()
+          .describe("Set true to bring an archived survey back into the list instead of hiding it."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ id, restore }) =>
+      run(async () => {
+        const archived = restore !== true;
+        const updated = await client.updateSurvey(id, { archived });
+
+        return result(
+          archived
+            ? `Archived "${id}". It is out of the survey list; the survey itself is untouched and still open on its link.`
+            : `Restored "${id}" to the survey list.`,
+          updated as unknown as Record<string, unknown>
+        );
+      })
+  );
+
+  server.registerTool(
+    "list_templates",
+    {
+      title: "List your saved templates",
+      description:
+        "List the saved question sets on the authenticated rifts.to account, with the id, name and questions of each. A template is not a live survey: it collects no answers until launch_template starts one from it. Use this to find the id of a template before launching it.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async () =>
+      run(async () => {
+        const templates = await client.listTemplates();
+        return result(formatTemplates(templates), { templates: templates as unknown[] });
+      })
+  );
+
+  server.registerTool(
+    "create_template",
+    {
+      title: "Save a template",
+      description:
+        "Save a set of questions for reuse, without starting a survey. Launching it later with launch_template creates a fresh survey each time, so a poll that runs every week keeps each week's answers separate. Editing and deleting templates is done on rifts.to, not here.",
+      inputSchema: {
+        name: z
+          .string()
+          .min(1)
+          .max(200)
+          .describe("What to call the template, e.g. 'Weekly standup'. Respondents never see it unless it becomes a survey's title at launch."),
+        questions: z.array(questionSchema).min(1).describe("At least one question."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async ({ name, questions }) =>
+      run(async () => {
+        const template = await client.createTemplate({
+          name,
+          questions: questions.map(toQuestionInput),
+        });
+
+        return result(
+          [
+            `Saved "${template.name}" with ${plural(template.questions.length, "question")}.`,
+            `Template id: ${template.id} (use it with launch_template).`,
+          ].join("\n"),
+          template as unknown as Record<string, unknown>
+        );
+      })
+  );
+
+  server.registerTool(
+    "launch_template",
+    {
+      title: "Launch a template",
+      description:
+        "Start a new live survey from a saved template and get back the two links that run it: a public URL to share and an admin URL showing results in real time. The new survey copies the template's questions as they are now — editing the template afterwards never changes a survey already launched from it, and each launch collects its own separate answers. Use this to run a recurring poll again.",
+      inputSchema: {
+        id: z
+          .string()
+          .min(1)
+          .describe("The template id, from list_templates or create_template."),
+        slug: z
+          .string()
+          .min(3)
+          .max(64)
+          .regex(CUSTOM_SLUG, "lowercase letters, digits and single hyphens only")
+          .optional()
+          .describe(
+            "Optional custom link for this launch, e.g. 'standup-mood'. Fails if the name is already taken by another survey, including an earlier launch of this same template."
+          ),
+        theme: themeSchema
+          .optional()
+          .describe(
+            "Optional colors for the respondent page. Omit it and the launch uses the palette this account last saved on rifts.to."
+          ),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async ({ id, slug, theme }) =>
+      run(async () => {
+        const input: LaunchTemplateInput = {
+          ...(slug ? { slug } : {}),
+          ...(theme ? { theme } : {}),
+        };
+        const survey = await client.launchTemplate(id, input);
+
+        return result(
+          [
+            `Launched "${survey.title}" from template ${survey.template_id}.`,
+            ``,
+            `Share this link with the audience: ${survey.url}`,
+            `Watch the results here: ${survey.admin_url}`,
+            ``,
+            `Survey id: ${survey.id} (use it with get_survey_results and close_survey).`,
+            ...themeLine(survey.theme),
+          ].join("\n"),
+          survey as unknown as Record<string, unknown>
+        );
+      })
+  );
+}
+
+/**
+ * One line, only when there is something to say. A survey painted in the
+ * account's own remembered palette is the common case and reporting it every
+ * time is noise; a survey that came back untinted after a color was asked for
+ * is the case worth surfacing, and this is where it shows up.
+ */
+function themeLine(theme: SurveyTheme | undefined): string[] {
+  if (!theme || theme === "default") return [];
+  return [
+    typeof theme === "string"
+      ? `Colors: the ${theme} palette.`
+      : `Colors: ${theme.primary} on ${theme.background}.`,
+  ];
+}
+
+function formatTemplates(templates: Template[]): string {
+  if (templates.length === 0) {
+    return "No templates saved on this account. create_template saves one, and create_survey starts a one-off survey without saving anything.";
+  }
+
+  const lines = templates.map(
+    (t) => `- ${t.name} [${t.id}]: ${plural(t.questions.length, "question")}`
+  );
+
+  return `${plural(templates.length, "template")}:\n${lines.join("\n")}`;
 }
 
 /**

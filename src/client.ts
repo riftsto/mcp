@@ -54,6 +54,42 @@ export interface Condition {
   values: string[];
 }
 
+/**
+ * The respondent page's palette. Either one of the presets rifts.to ships, or
+ * a creator's own `{primary, background}` pair, which the server stores as
+ * `custom:rrggbb:rrggbb`.
+ *
+ * The preset list is duplicated from `src/lib/themes.ts` in the rifts.to
+ * repository rather than fetched, because this package talks HTTP and shares
+ * no types with it. A preset added there and not here is refused by this
+ * client's schema before it ever reaches the API — the failure is a clear
+ * "not a known theme" rather than a silent 400, and adding the name here is
+ * the whole fix.
+ *
+ * "default" is the house palette, and asking for it explicitly *clears* an
+ * override rather than meaning "no opinion". Omitting `theme` entirely is what
+ * means no opinion, and on create that lets the account's own remembered
+ * palette apply.
+ */
+export const THEME_PRESETS = [
+  "default",
+  "sunset",
+  "ocean",
+  "forest",
+  "rose",
+  "slate",
+] as const;
+
+export type ThemePreset = (typeof THEME_PRESETS)[number];
+
+/** Two 6-digit hex colors, `#rrggbb`. rifts.to derives the rest of the palette. */
+export interface CustomTheme {
+  primary: string;
+  background: string;
+}
+
+export type SurveyTheme = ThemePreset | CustomTheme;
+
 export interface MultipleChoiceQuestionInput {
   type: "multiple_choice";
   text: string;
@@ -103,6 +139,8 @@ export interface CreatedSurvey {
   admin_token: string;
   admin_url: string;
   created_at: string;
+  /** The palette the survey actually got, which is not always the one asked for. */
+  theme: SurveyTheme;
 }
 
 export interface SurveyResponseRow {
@@ -144,7 +182,59 @@ export interface CreateSurveyInput {
   questions: QuestionInput[];
   /** Custom slug, e.g. `standup-mood`. Subscriber-only, and may already be taken. */
   slug?: string;
+  /**
+   * Omit it and the survey takes the account's remembered palette — the same
+   * one the web builder opens on. That fallback is the reason this is optional
+   * rather than defaulted here: a default sent from this client would override
+   * the creator's own brand with the house colors.
+   */
+  theme?: SurveyTheme;
 }
+
+/**
+ * Everything `PATCH /api/v1/surveys/[id]` will change. At least one field, and
+ * the server validates all of them before writing any, so a half-wrong patch
+ * changes nothing at all.
+ */
+export interface UpdateSurveyInput {
+  status?: "open" | "closed";
+  theme?: SurveyTheme;
+  /** Replaces the whole list. Restricted once the survey has responses. */
+  questions?: QuestionInput[];
+  /** Hides it from the account listing. Never closes it, never breaks its link. */
+  archived?: boolean;
+}
+
+/** The survey's id and status, plus whichever fields the patch changed. */
+export interface UpdatedSurvey {
+  id: string;
+  status: "open" | "closed";
+  theme?: SurveyTheme;
+  questions?: Question[];
+  archived?: boolean;
+}
+
+/** A saved set of questions. Not a live survey: no link, no admin token, no answers. */
+export interface Template {
+  id: string;
+  name: string;
+  questions: Question[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateTemplateInput {
+  name: string;
+  questions: QuestionInput[];
+}
+
+export interface LaunchTemplateInput {
+  slug?: string;
+  theme?: SurveyTheme;
+}
+
+/** A survey launched from a template: a created survey, plus its provenance. */
+export type LaunchedSurvey = CreatedSurvey & { template_id: string };
 
 export interface ListSurveysOptions {
   includeAdmin?: boolean;
@@ -213,10 +303,62 @@ export class RiftsClient {
     return this.request<SurveyResults>("GET", `/api/v1/surveys/${encodeURIComponent(id)}`);
   }
 
+  /**
+   * The one write that changes a survey already in flight. `closeSurvey`,
+   * `reopenSurvey` and archiving are all this call with a different body —
+   * kept as named wrappers because a tool that means "close this" should not
+   * have to assemble a patch, and because the error each one can hit differs.
+   */
+  async updateSurvey(id: string, patch: UpdateSurveyInput): Promise<UpdatedSurvey> {
+    return this.request<UpdatedSurvey>(
+      "PATCH",
+      `/api/v1/surveys/${encodeURIComponent(id)}`,
+      patch
+    );
+  }
+
   async closeSurvey(id: string): Promise<CloseResult> {
     return this.request<CloseResult>("PATCH", `/api/v1/surveys/${encodeURIComponent(id)}`, {
       status: "closed",
     });
+  }
+
+  /**
+   * Refused with a 409 when the survey's expiry has already passed: flipping
+   * the column back would change a row and nothing a respondent would see, so
+   * the API says so rather than reporting a success that did nothing.
+   */
+  async reopenSurvey(id: string): Promise<UpdatedSurvey> {
+    return this.updateSurvey(id, { status: "open" });
+  }
+
+  async listTemplates(): Promise<Template[]> {
+    const body = await this.request<{ templates: Template[] }>("GET", "/api/v1/templates");
+    return body.templates;
+  }
+
+  async createTemplate(input: CreateTemplateInput): Promise<Template> {
+    return this.request<Template>("POST", "/api/v1/templates", input);
+  }
+
+  /**
+   * Copies the template's questions into a fresh survey. The copy is taken at
+   * launch: editing the template afterwards never touches a survey already
+   * launched from it, which is what keeps last week's answers out of this
+   * week's.
+   *
+   * Always sends a body, even an empty one, so the request stays a well-formed
+   * JSON POST rather than relying on the route's tolerance of an absent one.
+   */
+  async launchTemplate(
+    id: string,
+    input: LaunchTemplateInput = {}
+  ): Promise<LaunchedSurvey> {
+    return this.request<LaunchedSurvey>(
+      "POST",
+      `/api/v1/templates/${encodeURIComponent(id)}/launch`,
+      input
+    );
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -274,7 +416,7 @@ async function toApiError(response: Response): Promise<RiftsApiError> {
 
   switch (response.status) {
     case 400: {
-      const readable = requirementErrorMessage(error);
+      const readable = requirementErrorMessage(error) ?? liveEditErrorMessage(error);
       return new RiftsApiError(readable ?? `rifts.to rejected the request (400)${suffix(error)}`, 400, code);
     }
 
@@ -303,6 +445,36 @@ async function toApiError(response: Response): Promise<RiftsApiError> {
       // as one that does not exist, on purpose, so this message must not claim
       // to know which it was.
       return new RiftsApiError("no such survey (or not yours) (404)", 404, code);
+
+    case 409: {
+      // Four distinct situations share this status, and a model that cannot
+      // tell them apart retries the one thing that will never work.
+      switch (code) {
+        case "slug_taken":
+          return new RiftsApiError(
+            "that custom link is already taken by another survey. Pick a different one, or leave the slug out to get a readable three-word link.",
+            409,
+            code
+          );
+        case "survey_limit_reached":
+          return new RiftsApiError(
+            "this account is at its cap of 500 surveys. Archive or delete some from the rifts.to dashboard first.",
+            409,
+            code
+          );
+        case "template_limit_reached":
+          return new RiftsApiError(
+            "this account is at its cap of 200 templates. Delete some from the rifts.to account pages first.",
+            409,
+            code
+          );
+        default:
+          // `survey_expired` and anything added later: the API's own sentence
+          // already says what happened and what to do, so it is passed through
+          // rather than paraphrased into something less specific.
+          return new RiftsApiError(error ?? `rifts.to refused the request (409)`, 409, code);
+      }
+    }
 
     case 429: {
       const retryAfter = response.headers.get("Retry-After");
@@ -375,6 +547,30 @@ function requirementErrorMessage(error?: string): string | undefined {
   };
 
   return fixed[error];
+}
+
+/**
+ * `validateLiveEdit` refuses an edit that would orphan collected answers, and
+ * its wording says what is forbidden. A model reading that in a chat window
+ * still needs to know what it *can* do, or it retries the same edit with a
+ * smaller change and fails again.
+ *
+ * The rule underneath is one fact: a response stores the option's text and the
+ * question's position, and `responses` is frozen with no schema snapshot, so
+ * nothing can reconstruct an answer whose question or option moved out from
+ * under it. Adding questions is always allowed; the rest needs a new survey.
+ */
+function liveEditErrorMessage(error?: string): string | undefined {
+  const fixed: Record<string, string> = {
+    "cannot remove a question once the survey has responses":
+      "a question can't be removed once people have answered — answers are keyed by position, so removing one would orphan them. You can add questions to the end, or create a new survey for the changed question set.",
+    "cannot change a question's type or order once the survey has responses":
+      "a question's type and position are fixed once people have answered, since that is how their answers are stored. You can add questions to the end, or create a new survey.",
+    "cannot remove or rename an option once the survey has responses":
+      "an option can't be renamed or removed once people have answered — answers store the option's text, so the old ones would stop matching. You can add options, or create a new survey.",
+  };
+
+  return error ? fixed[error] : undefined;
 }
 
 const suffix = (error?: string) => (error ? `: ${error}` : "");

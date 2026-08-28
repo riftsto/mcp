@@ -49,6 +49,26 @@ function stubClient(overrides: Partial<RiftsClient> = {}) {
       responses: [],
     }),
     closeSurvey: record("closeSurvey", { id: "fuzzy-sleepy-tornado", status: "closed" }),
+    reopenSurvey: record("reopenSurvey", { id: "fuzzy-sleepy-tornado", status: "open" }),
+    updateSurvey: record("updateSurvey", { id: "fuzzy-sleepy-tornado", status: "open" }),
+    listTemplates: record("listTemplates", []),
+    createTemplate: record("createTemplate", {
+      id: "tpl-1",
+      name: "Weekly standup",
+      questions: [{ index: 0, type: "rating", text: "How's the week going?", scale: { min: 1, max: 10 } }],
+      created_at: "2026-08-01T00:00:00.000Z",
+      updated_at: "2026-08-01T00:00:00.000Z",
+    }),
+    launchTemplate: record("launchTemplate", {
+      id: "fuzzy-sleepy-tornado",
+      title: "Weekly standup",
+      url: "https://rifts.to/en/s/fuzzy-sleepy-tornado",
+      admin_token: "tok",
+      admin_url: "https://rifts.to/en/admin/tok",
+      created_at: "2026-08-10T00:00:00.000Z",
+      template_id: "tpl-1",
+      theme: "ocean",
+    }),
     ...overrides,
   } as unknown as RiftsClient;
 
@@ -81,14 +101,20 @@ const textOf = (result: unknown) =>
     .join("\n");
 
 describe("tool listing", () => {
-  it("exposes exactly the four tools, and no more", async () => {
+  it("exposes exactly the ten tools, and no more", async () => {
     const { mcp } = await connect(stubClient().client);
     const { tools } = await mcp.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
+      "archive_survey",
       "close_survey",
       "create_survey",
+      "create_template",
       "get_survey_results",
+      "launch_template",
       "list_surveys",
+      "list_templates",
+      "reopen_survey",
+      "update_survey",
     ]);
   });
 
@@ -122,6 +148,10 @@ describe("tool listing", () => {
     expect(annotationsFor("get_survey_results").readOnlyHint).toBe(true);
     expect(annotationsFor("create_survey").readOnlyHint).toBe(false);
     expect(annotationsFor("close_survey").destructiveHint).toBe(true);
+    expect(annotationsFor("list_templates").readOnlyHint).toBe(true);
+    expect(annotationsFor("reopen_survey").readOnlyHint).toBe(false);
+    expect(annotationsFor("update_survey").readOnlyHint).toBe(false);
+    expect(annotationsFor("launch_template").readOnlyHint).toBe(false);
   });
 
   it("keeps tool names within the 64-character limit the directory enforces", async () => {
@@ -450,5 +480,293 @@ describe("error handling", () => {
     const res = await mcp.callTool({ name: "get_survey_results", arguments: { id: "nope" } });
     expect((res as { isError?: boolean }).isError).toBe(true);
     expect(textOf(res)).toContain("no such survey");
+  });
+});
+
+/**
+ * The tools added when /api/v1 caught up with the browser: a survey created
+ * from a chat client can now be themed, reopened, edited, archived, and
+ * launched from a saved template. Each is asserted through the real server for
+ * the reason the file's header gives — the wiring between a zod schema and the
+ * SDK is what actually breaks.
+ */
+describe("create_survey — theme", () => {
+  it("passes a preset through unchanged", async () => {
+    const { client, calls } = stubClient();
+    const { mcp } = await connect(client);
+
+    await mcp.callTool({
+      name: "create_survey",
+      arguments: {
+        title: "T",
+        questions: [{ type: "free_text", text: "Why?" }],
+        theme: "ocean",
+      },
+    });
+
+    expect((firstCall(calls).args[0] as { theme?: unknown }).theme).toBe("ocean");
+  });
+
+  it("passes a custom hex pair through as an object", async () => {
+    const { client, calls } = stubClient();
+    const { mcp } = await connect(client);
+
+    await mcp.callTool({
+      name: "create_survey",
+      arguments: {
+        title: "T",
+        questions: [{ type: "free_text", text: "Why?" }],
+        theme: { primary: "#aa00ff", background: "#101014" },
+      },
+    });
+
+    expect((firstCall(calls).args[0] as { theme?: unknown }).theme).toEqual({
+      primary: "#aa00ff",
+      background: "#101014",
+    });
+  });
+
+  it("refuses a color the API would refuse, before spending a call", async () => {
+    const { client, calls } = stubClient();
+    const { mcp } = await connect(client);
+
+    const res = await mcp.callTool({
+      name: "create_survey",
+      arguments: {
+        title: "T",
+        questions: [{ type: "free_text", text: "Why?" }],
+        theme: { primary: "puce", background: "#101014" },
+      },
+    });
+
+    expect((res as { isError?: boolean }).isError).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses a preset name that does not exist", async () => {
+    const { client } = stubClient();
+    const { mcp } = await connect(client);
+
+    const res = await mcp.callTool({
+      name: "create_survey",
+      arguments: {
+        title: "T",
+        questions: [{ type: "free_text", text: "Why?" }],
+        theme: "chartreuse",
+      },
+    });
+
+    expect((res as { isError?: boolean }).isError).toBe(true);
+  });
+});
+
+describe("reopen_survey", () => {
+  it("reopens by id and says the survey is taking answers again", async () => {
+    const { client, calls } = stubClient();
+    const { mcp } = await connect(client);
+
+    const res = await mcp.callTool({
+      name: "reopen_survey",
+      arguments: { id: "fuzzy-sleepy-tornado" },
+    });
+
+    expect(firstCall(calls).method).toBe("reopenSurvey");
+    expect(firstCall(calls).args[0]).toBe("fuzzy-sleepy-tornado");
+    expect(textOf(res)).toMatch(/open/i);
+  });
+
+  it("hands back the expiry refusal rather than reporting success", async () => {
+    // The API refuses to reopen an expired survey because flipping the column
+    // would change nothing a respondent sees. That distinction is worthless if
+    // the tool swallows it.
+    const { client } = stubClient({
+      reopenSurvey: () => {
+        throw new Error(
+          "this survey has expired, so reopening it would not accept responses; change its expiry from the admin dashboard first"
+        );
+      },
+    } as unknown as Partial<RiftsClient>);
+    const { mcp } = await connect(client);
+
+    const res = await mcp.callTool({
+      name: "reopen_survey",
+      arguments: { id: "fuzzy-sleepy-tornado" },
+    });
+
+    expect((res as { isError?: boolean }).isError).toBe(true);
+    expect(textOf(res)).toMatch(/expired/i);
+  });
+});
+
+describe("update_survey", () => {
+  it("repaints a survey without touching anything else", async () => {
+    const { client, calls } = stubClient();
+    const { mcp } = await connect(client);
+
+    await mcp.callTool({
+      name: "update_survey",
+      arguments: { id: "fuzzy-sleepy-tornado", theme: "forest" },
+    });
+
+    const call = firstCall(calls);
+    expect(call.method).toBe("updateSurvey");
+    expect(call.args[1]).toEqual({ theme: "forest" });
+  });
+
+  it("sends a rewritten question list with the rating scale filled in", async () => {
+    const { client, calls } = stubClient();
+    const { mcp } = await connect(client);
+
+    await mcp.callTool({
+      name: "update_survey",
+      arguments: {
+        id: "fuzzy-sleepy-tornado",
+        questions: [{ type: "rating", text: "How was it?" }],
+      },
+    });
+
+    expect(firstCall(calls).args[1]).toEqual({
+      questions: [{ type: "rating", text: "How was it?", scale: { min: 1, max: 10 } }],
+    });
+  });
+
+  it("refuses a call that changes nothing", async () => {
+    const { client, calls } = stubClient();
+    const { mcp } = await connect(client);
+
+    const res = await mcp.callTool({
+      name: "update_survey",
+      arguments: { id: "fuzzy-sleepy-tornado" },
+    });
+
+    expect((res as { isError?: boolean }).isError).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("relays a refusal that protects collected answers", async () => {
+    const { client } = stubClient({
+      updateSurvey: () => {
+        throw new Error("cannot remove a question once the survey has responses");
+      },
+    } as unknown as Partial<RiftsClient>);
+    const { mcp } = await connect(client);
+
+    const res = await mcp.callTool({
+      name: "update_survey",
+      arguments: {
+        id: "fuzzy-sleepy-tornado",
+        questions: [{ type: "free_text", text: "Only one now" }],
+      },
+    });
+
+    expect((res as { isError?: boolean }).isError).toBe(true);
+    expect(textOf(res)).toMatch(/responses/i);
+  });
+});
+
+describe("archive_survey", () => {
+  it("archives by id", async () => {
+    const { client, calls } = stubClient();
+    const { mcp } = await connect(client);
+
+    await mcp.callTool({ name: "archive_survey", arguments: { id: "fuzzy-sleepy-tornado" } });
+
+    expect(firstCall(calls).args[1]).toEqual({ archived: true });
+  });
+
+  it("puts one back when asked to restore it", async () => {
+    const { client, calls } = stubClient();
+    const { mcp } = await connect(client);
+
+    await mcp.callTool({
+      name: "archive_survey",
+      arguments: { id: "fuzzy-sleepy-tornado", restore: true },
+    });
+
+    expect(firstCall(calls).args[1]).toEqual({ archived: false });
+  });
+
+  it("says archiving leaves the survey running", async () => {
+    // The word "archive" reads like "close" to a model that has not been told
+    // otherwise, and getting that wrong stops a live poll mid-session.
+    const { mcp } = await connect(stubClient().client);
+    const { tools } = await mcp.listTools();
+    const tool = tools.find((t) => t.name === "archive_survey");
+
+    expect(tool?.description).toMatch(/still|keeps working|does not close/i);
+  });
+});
+
+describe("templates", () => {
+  it("lists them with their question counts", async () => {
+    const { client } = stubClient({
+      listTemplates: () =>
+        Promise.resolve([
+          {
+            id: "tpl-1",
+            name: "Weekly standup",
+            questions: [
+              { index: 0, type: "rating", text: "How's the week going?", scale: { min: 1, max: 10 } },
+            ],
+            created_at: "2026-08-01T00:00:00.000Z",
+            updated_at: "2026-08-02T00:00:00.000Z",
+          },
+        ]),
+    } as unknown as Partial<RiftsClient>);
+    const { mcp } = await connect(client);
+
+    const text = textOf(await mcp.callTool({ name: "list_templates", arguments: {} }));
+
+    expect(text).toContain("Weekly standup");
+    expect(text).toContain("tpl-1");
+    expect(text).toMatch(/1 question/);
+  });
+
+  it("says so when there are none, rather than returning an empty list", async () => {
+    const { mcp } = await connect(stubClient().client);
+    const text = textOf(await mcp.callTool({ name: "list_templates", arguments: {} }));
+    expect(text).toMatch(/no templates/i);
+  });
+
+  it("saves a question set", async () => {
+    const { client, calls } = stubClient();
+    const { mcp } = await connect(client);
+
+    await mcp.callTool({
+      name: "create_template",
+      arguments: { name: "Weekly standup", questions: [{ type: "rating", text: "How's the week going?" }] },
+    });
+
+    const sent = firstCall(calls).args[0] as { name: string; questions: Array<{ scale?: unknown }> };
+    expect(sent.name).toBe("Weekly standup");
+    expect(sent.questions[0]?.scale).toEqual({ min: 1, max: 10 });
+  });
+
+  it("launches one and returns both links plus the id to read results with", async () => {
+    const { client, calls } = stubClient();
+    const { mcp } = await connect(client);
+
+    const text = textOf(
+      await mcp.callTool({ name: "launch_template", arguments: { id: "tpl-1", theme: "ocean" } })
+    );
+
+    expect(firstCall(calls).method).toBe("launchTemplate");
+    expect(firstCall(calls).args[1]).toEqual({ theme: "ocean" });
+    expect(text).toContain("https://rifts.to/en/s/fuzzy-sleepy-tornado");
+    expect(text).toContain("https://rifts.to/en/admin/tok");
+    expect(text).toContain("fuzzy-sleepy-tornado");
+  });
+
+  it("refuses a slug the API would refuse", async () => {
+    const { client, calls } = stubClient();
+    const { mcp } = await connect(client);
+
+    const res = await mcp.callTool({
+      name: "launch_template",
+      arguments: { id: "tpl-1", slug: "Not A Slug" },
+    });
+
+    expect((res as { isError?: boolean }).isError).toBe(true);
+    expect(calls).toHaveLength(0);
   });
 });

@@ -4,7 +4,7 @@
 [![CI](https://github.com/riftsto/mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/riftsto/mcp/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
-An MCP server for [rifts.to](https://rifts.to), a live audience survey tool. It lets an AI client create a survey, list the surveys on your account, read back the results, and close a survey when you're done collecting responses.
+An MCP server for [rifts.to](https://rifts.to), a live audience survey tool. It lets an AI client create a survey — in your own colors — list the surveys on your account, read back the results, edit or reopen one, and relaunch a saved template when the same poll comes round again.
 
 Point a poll at your audience by asking your AI client to do it, and check the answers the same way, without leaving the chat.
 
@@ -17,10 +17,36 @@ own copy](#run-it-yourself) is supported too.
 
 ## Tools
 
-- **`create_survey`**: creates a survey from a title and a list of questions and returns its public link and admin link. Optionally accepts a custom slug.
+- **`create_survey`**: creates a survey from a title and a list of questions and returns its public link and admin link. Optionally accepts a custom slug and a [theme](#colors).
 - **`list_surveys`**: lists the surveys on your account, with title, status, and response count. Admin links are included only if you ask for them, so a routine listing doesn't hand a model a pile of credentials it didn't need.
 - **`get_survey_results`**: returns a survey's questions and every response.
-- **`close_survey`**: stops a survey from accepting new responses. Reopening, retitling, and editing questions stay in the rifts.to admin dashboard, not here.
+- **`close_survey`**: stops a survey from accepting new responses.
+- **`reopen_survey`**: lets a closed survey take answers again. A survey past its expiry date is refused rather than silently left closed.
+- **`update_survey`**: changes a live survey's colors, its questions, or both. Questions can be added after people start answering, but not removed, reordered, retyped, or have their options renamed — see [editing a survey that already has answers](#editing-a-survey-that-already-has-answers).
+- **`archive_survey`**: hides a survey from your list without closing it. `restore: true` puts it back.
+- **`list_templates`** / **`create_template`** / **`launch_template`**: saved question sets, and starting a fresh survey from one. Each launch collects its own answers, so a weekly poll keeps its weeks apart.
+
+Retitling is the one thing the API cannot do, because no part of rifts.to renames a live survey. Editing and deleting templates stay on the website too.
+
+## Colors
+
+`create_survey`, `update_survey` and `launch_template` all take a `theme`. It is either one of the presets — `sunset`, `ocean`, `forest`, `rose`, `slate` — or your own pair of hex colors:
+
+```json
+{ "theme": { "primary": "#7c5cfa", "background": "#09090e" } }
+```
+
+rifts.to derives the rest of the palette (surfaces, borders, muted text, and a light-mode variant for respondents whose device asks for one) from those two, and contrast-checks the result.
+
+**Leave `theme` out and the survey is painted in whatever palette your account last saved on rifts.to.** That is usually your own brand, so omitting it is the right default rather than a missing feature; `"default"` is how you ask for the rifts.to house colors instead. Setting a theme from here never changes the palette the website's own builder opens on — that one stays yours to set by hand.
+
+Only the page respondents see is themed. Your results dashboard is not.
+
+## Editing a survey that already has answers
+
+`update_survey` replaces a survey's whole question list, and once responses exist rifts.to restricts what that list may become. Questions can be **added** to the end. They cannot be removed, reordered, or have their type changed, and a multiple-choice option cannot be renamed or dropped.
+
+The reason is that a response stores the option's exact text against the question's position, and the responses table keeps no snapshot of the questions it was answering. Rename an option and every answer naming the old one stops matching; remove a question and the answers keyed to that position belong to whatever moved up into it. Neither is recoverable, so the API refuses the edit and says which rule stopped it. When the question set genuinely needs to change, start a new survey.
 
 ### Optional and conditional questions
 
