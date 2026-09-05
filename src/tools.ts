@@ -1,5 +1,5 @@
 /**
- * The four tools, and the text a model actually reads.
+ * The tools, and the text a model actually reads.
  *
  * **Descriptions say what a tool does, never how Claude should behave.** The
  * Connectors Directory rejects descriptions that instruct the model rather
@@ -29,10 +29,12 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { THEME_PRESETS } from "./client.js";
 import type {
+  CloneSurveyInput,
   LaunchTemplateInput,
   Question,
   QuestionInput,
   RiftsClient,
+  SurveyAggregate,
   SurveyResults,
   SurveySummary,
   SurveyTheme,
@@ -478,6 +480,119 @@ export function registerTools(server: McpServer, client: RiftsClient): void {
         );
       })
   );
+
+  server.registerTool(
+    "get_survey_summary",
+    {
+      title: "Summarize a survey's results",
+      description:
+        "Read a survey's results as counts: how many people answered, a tally for every multiple-choice option including the ones nobody picked, and the mean and spread of every rating. Prefer this over get_survey_results whenever the question is about the numbers — a survey with hundreds of written answers is far larger than its summary. Written answers are not included; get_survey_results returns those.",
+      inputSchema: {
+        id: z.string().min(1).describe("The survey id, e.g. 'fuzzy-sleepy-tornado'."),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ id }) =>
+      run(async () => {
+        const summary = await client.getSurveySummary(id);
+        return result(formatSummary(summary), summary as unknown as Record<string, unknown>);
+      })
+  );
+
+  server.registerTool(
+    "rename_survey",
+    {
+      title: "Rename a survey",
+      description:
+        "Change a survey's title. The public link, the admin link and every response already collected are unaffected: a response is tied to its survey by id, so the title is not a key for anything.",
+      inputSchema: {
+        id: z.string().min(1).describe("The survey id, e.g. 'fuzzy-sleepy-tornado'."),
+        title: z
+          .string()
+          .min(1)
+          .max(200)
+          .describe("The new title. Up to 200 characters, matching the web builder."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ id, title }) =>
+      run(async () => {
+        const survey = await client.renameSurvey(id, title);
+        return result(
+          `Renamed "${id}" to "${title}". Its link and its responses are unchanged.`,
+          survey as unknown as Record<string, unknown>
+        );
+      })
+  );
+
+  server.registerTool(
+    "clone_survey",
+    {
+      title: "Run a survey again as a new one",
+      description:
+        "Copy a survey's questions into a brand new survey with its own link, its own admin token and no responses. Use this to run the same poll a second time; use save_survey_as_template instead when it will run repeatedly. The clone does not inherit the original's archived state or expiry, so copying an expired survey on an active subscription produces a live one. Without a theme it keeps the original's colors. The returned admin link is a credential: anyone holding it can read and administer the new survey.",
+      inputSchema: {
+        id: z.string().min(1).describe("The survey to copy, e.g. 'fuzzy-sleepy-tornado'."),
+        title: z
+          .string()
+          .min(1)
+          .max(200)
+          .optional()
+          .describe("Title for the copy. Defaults to the original's."),
+        slug: z
+          .string()
+          .regex(CUSTOM_SLUG, "lowercase words separated by single hyphens")
+          .optional()
+          .describe("A chosen link instead of a random three-word one. Paid tier."),
+        theme: themeSchema.optional().describe("Palette for the copy. Defaults to the original's."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    },
+    async ({ id, title, slug, theme }) =>
+      run(async () => {
+        const input: CloneSurveyInput = {};
+        if (title !== undefined) input.title = title;
+        if (slug !== undefined) input.slug = slug;
+        if (theme !== undefined) input.theme = theme as SurveyTheme;
+
+        const clone = await client.cloneSurvey(id, input);
+        return result(
+          `Copied "${id}" into a new survey "${clone.title}" [${clone.id}], with no responses.\n` +
+            `Share: ${clone.url}\n` +
+            `Administer: ${clone.admin_url}\n` +
+            `That admin link is this survey's only credential.`,
+          clone as unknown as Record<string, unknown>
+        );
+      })
+  );
+
+  server.registerTool(
+    "save_survey_as_template",
+    {
+      title: "Save a survey as a reusable template",
+      description:
+        "Save a survey's questions as a template, so launch_template can run them again later. The template is a snapshot, not a link: editing the survey afterwards never changes the template, and launching the template never changes the survey. Use clone_survey instead for a one-off repeat.",
+      inputSchema: {
+        id: z.string().min(1).describe("The survey to save, e.g. 'fuzzy-sleepy-tornado'."),
+        name: z
+          .string()
+          .min(1)
+          .max(200)
+          .optional()
+          .describe("Name for the template. Defaults to the survey's title."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    },
+    async ({ id, name }) =>
+      run(async () => {
+        const template = await client.saveSurveyAsTemplate(id, name);
+        return result(
+          `Saved "${id}" as the template "${template.name}" [${template.id}], ` +
+            `${plural(template.question_count, "question")}. launch_template runs it again.`,
+          template as unknown as Record<string, unknown>
+        );
+      })
+  );
 }
 
 /**
@@ -512,6 +627,41 @@ function formatTemplates(templates: Template[]): string {
  */
 function toQuestionInput(question: z.infer<typeof questionSchema>): QuestionInput {
   return question.type === "rating" ? { ...question, scale: { ...RATING_SCALE } } : question;
+}
+
+/**
+ * An aggregate as prose. The model reasons over this, not the JSON, so it has
+ * to read as an answer rather than a dump: a zero is stated rather than
+ * omitted, because "nobody picked Tuesday" is usually the finding.
+ */
+function formatSummary(a: SurveyAggregate): string {
+  const head = `"${a.title}" [${a.id}] is ${a.status} with ${plural(a.response_count, "response")}.`;
+  if (a.response_count === 0) {
+    return `${head} Nothing to summarize yet. Share ${a.url} to collect some.`;
+  }
+
+  const parts = a.questions.map((q) => {
+    if (q.type === "multiple_choice") {
+      const counts = (q.counts ?? [])
+        .map((c) => `${c.option}: ${c.count}`)
+        .join(", ");
+      const orphaned = q.unmatched ? ` (${q.unmatched} for options since removed)` : "";
+      return `${q.text}\n  ${counts}${orphaned}`;
+    }
+    if (q.type === "rating") {
+      if (q.answered === 0) return `${q.text}\n  nobody rated this`;
+      const spread = (q.distribution ?? [])
+        .filter((d) => d.count > 0)
+        .map((d) => `${d.value}: ${d.count}`)
+        .join(", ");
+      return `${q.text}\n  mean ${q.mean} from ${plural(q.answered, "rating")} (${spread})`;
+    }
+    // Written answers are not in an aggregate by construction. Say so, rather
+    // than leaving the model to infer that nobody wrote anything.
+    return `${q.text}\n  ${plural(q.answered, "written answer")}; use get_survey_results to read them`;
+  });
+
+  return `${head}\n\n${parts.join("\n")}`;
 }
 
 function result(text: string, structuredContent: Record<string, unknown>): CallToolResult {

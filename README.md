@@ -20,17 +20,21 @@ own copy](#run-it-yourself) is supported too.
 - **`create_survey`**: creates a survey from a title and a list of questions and returns its public link and admin link. Optionally accepts a custom slug and a [theme](#colors).
 - **`list_surveys`**: lists the surveys on your account, with title, status, and response count. Admin links are included only if you ask for them, so a routine listing doesn't hand a model a pile of credentials it didn't need.
 - **`get_survey_results`**: returns a survey's questions and every response.
+- **`get_survey_summary`**: returns the counts instead of the responses — a tally for every multiple-choice option including the ones nobody picked, and the mean and spread of each rating. Reach for this rather than `get_survey_results` when the question is about the numbers: a survey with hundreds of written answers is far bigger than its summary. Written answers are not included.
+- **`rename_survey`**: changes a survey's title. The link and the answers are untouched.
 - **`close_survey`**: stops a survey from accepting new responses.
 - **`reopen_survey`**: lets a closed survey take answers again. A survey past its expiry date is refused rather than silently left closed.
 - **`update_survey`**: changes a live survey's colors, its questions, or both. Questions can be added after people start answering, but not removed, reordered, retyped, or have their options renamed — see [editing a survey that already has answers](#editing-a-survey-that-already-has-answers).
 - **`archive_survey`**: hides a survey from your list without closing it. `restore: true` puts it back.
+- **`clone_survey`**: runs the same questions again as a brand new survey, with its own link and no responses. For a one-off repeat; save a template if it will run every week. The clone does not inherit the original's archived state or expiry, so copying an expired survey on an active subscription gives you a live one.
+- **`save_survey_as_template`**: turns a live survey's questions into a template, the other direction from `launch_template`.
 - **`list_templates`** / **`create_template`** / **`launch_template`**: saved question sets, and starting a fresh survey from one. Each launch collects its own answers, so a weekly poll keeps its weeks apart.
 
-Retitling is the one thing the API cannot do, because no part of rifts.to renames a live survey. Editing and deleting templates stay on the website too.
+Editing and deleting templates stay on the website. A launch is additive and reversible; an edit silently rewrites something a recurring poll depends on.
 
 ## Colors
 
-`create_survey`, `update_survey` and `launch_template` all take a `theme`. It is either one of the presets — `sunset`, `ocean`, `forest`, `rose`, `slate` — or your own pair of hex colors:
+`create_survey`, `update_survey`, `launch_template` and `clone_survey` all take a `theme`. It is either one of the presets — `sunset`, `ocean`, `forest`, `rose`, `slate` — or your own pair of hex colors:
 
 ```json
 { "theme": { "primary": "#7c5cfa", "background": "#09090e" } }

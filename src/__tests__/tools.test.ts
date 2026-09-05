@@ -36,6 +36,66 @@ function stubClient(overrides: Partial<RiftsClient> = {}) {
       admin_url: "https://rifts.to/en/admin/tok",
       created_at: "2026-08-10T00:00:00.000Z",
     }),
+    getSurveySummary: record("getSurveySummary", {
+      id: "fuzzy-sleepy-tornado",
+      title: "Lunch",
+      status: "open",
+      created_at: "2026-08-10T00:00:00.000Z",
+      expires_at: null,
+      url: "https://rifts.to/en/s/fuzzy-sleepy-tornado",
+      theme: "default",
+      response_count: 3,
+      first_response_at: "2026-08-10T01:00:00.000Z",
+      last_response_at: "2026-08-10T03:00:00.000Z",
+      questions: [
+        {
+          index: 0,
+          type: "multiple_choice",
+          text: "Which day?",
+          answered: 3,
+          unmatched: 0,
+          counts: [
+            { option: "Monday", count: 2 },
+            { option: "Tuesday", count: 0 },
+            { option: "Wednesday", count: 1 },
+          ],
+        },
+        {
+          index: 1,
+          type: "rating",
+          text: "How useful?",
+          answered: 3,
+          mean: 6.67,
+          distribution: [
+            { value: 4, count: 1 },
+            { value: 7, count: 1 },
+            { value: 9, count: 1 },
+          ],
+        },
+        { index: 2, type: "free_text", text: "Anything else?", answered: 2 },
+      ],
+    }),
+    cloneSurvey: record("cloneSurvey", {
+      id: "spiky-fritter-garlic",
+      title: "Lunch, week 2",
+      url: "https://rifts.to/en/s/spiky-fritter-garlic",
+      admin_token: "tok2",
+      admin_url: "https://rifts.to/en/admin/tok2",
+      created_at: "2026-08-17T00:00:00.000Z",
+      cloned_from: "fuzzy-sleepy-tornado",
+      theme: "ocean",
+    }),
+    saveSurveyAsTemplate: record("saveSurveyAsTemplate", {
+      id: "tpl-1",
+      name: "Weekly lunch",
+      question_count: 3,
+      created_at: "2026-08-17T00:00:00.000Z",
+      saved_from: "fuzzy-sleepy-tornado",
+    }),
+    renameSurvey: record("renameSurvey", {
+      id: "fuzzy-sleepy-tornado",
+      title: "Lunch, renamed",
+    }),
     listSurveys: record("listSurveys", []),
     getSurveyResults: record("getSurveyResults", {
       id: "fuzzy-sleepy-tornado",
@@ -101,19 +161,23 @@ const textOf = (result: unknown) =>
     .join("\n");
 
 describe("tool listing", () => {
-  it("exposes exactly the ten tools, and no more", async () => {
+  it("exposes exactly the fourteen tools, and no more", async () => {
     const { mcp } = await connect(stubClient().client);
     const { tools } = await mcp.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
       "archive_survey",
+      "clone_survey",
       "close_survey",
       "create_survey",
       "create_template",
       "get_survey_results",
+      "get_survey_summary",
       "launch_template",
       "list_surveys",
       "list_templates",
+      "rename_survey",
       "reopen_survey",
+      "save_survey_as_template",
       "update_survey",
     ]);
   });
@@ -768,5 +832,132 @@ describe("templates", () => {
 
     expect((res as { isError?: boolean }).isError).toBe(true);
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("get_survey_summary", () => {
+  it("reads as an answer, and states the zero rather than omitting it", async () => {
+    const { client } = stubClient();
+    const { mcp } = await connect(client);
+    const text = textOf(await mcp.callTool({ name: "get_survey_summary", arguments: { id: "fuzzy-sleepy-tornado" } }));
+
+    expect(text).toContain("Monday: 2");
+    // "nobody picked Tuesday" is usually the finding, so a zero has to survive
+    // into the prose the model reasons over.
+    expect(text).toContain("Tuesday: 0");
+    expect(text).toContain("mean 6.67");
+  });
+
+  it("says written answers are elsewhere rather than letting the model infer there are none", async () => {
+    const { client } = stubClient();
+    const { mcp } = await connect(client);
+    const text = textOf(await mcp.callTool({ name: "get_survey_summary", arguments: { id: "fuzzy-sleepy-tornado" } }));
+
+    expect(text).toContain("2 written answers");
+    expect(text).toContain("get_survey_results");
+  });
+
+  it("does not pretend to summarize a survey with no responses", async () => {
+    const { client } = stubClient({
+      getSurveySummary: (() =>
+        Promise.resolve({
+          id: "empty-survey-here",
+          title: "Empty",
+          status: "open",
+          created_at: "2026-08-10T00:00:00.000Z",
+          expires_at: null,
+          url: "https://rifts.to/en/s/empty-survey-here",
+          theme: "default",
+          response_count: 0,
+          first_response_at: null,
+          last_response_at: null,
+          questions: [],
+        })) as unknown as RiftsClient["getSurveySummary"],
+    });
+    const { mcp } = await connect(client);
+    const text = textOf(await mcp.callTool({ name: "get_survey_summary", arguments: { id: "empty-survey-here" } }));
+
+    expect(text).toContain("Nothing to summarize yet");
+  });
+});
+
+describe("rename_survey", () => {
+  it("renames and says what did not change", async () => {
+    const { client, calls } = stubClient();
+    const { mcp } = await connect(client);
+    const text = textOf(
+      await mcp.callTool({ name: "rename_survey", arguments: { id: "fuzzy-sleepy-tornado", title: "Lunch, renamed" } })
+    );
+
+    expect(calls).toContainEqual({
+      method: "renameSurvey",
+      args: ["fuzzy-sleepy-tornado", "Lunch, renamed"],
+    });
+    expect(text).toContain("Lunch, renamed");
+    expect(text).toContain("unchanged");
+  });
+
+  it("refuses a title over the 200 characters the API takes", async () => {
+    const { mcp } = await connect(stubClient().client);
+    const res = await mcp.callTool({
+      name: "rename_survey",
+      arguments: { id: "fuzzy-sleepy-tornado", title: "x".repeat(201) },
+    });
+    // Refused here rather than as a 400 the model cannot read its way out of.
+    expect(res.isError).toBe(true);
+  });
+});
+
+describe("clone_survey", () => {
+  it("returns both links and names the admin one as a credential", async () => {
+    const { client, calls } = stubClient();
+    const { mcp } = await connect(client);
+    const text = textOf(await mcp.callTool({ name: "clone_survey", arguments: { id: "fuzzy-sleepy-tornado" } }));
+
+    expect(calls).toContainEqual({ method: "cloneSurvey", args: ["fuzzy-sleepy-tornado", {}] });
+    expect(text).toContain("https://rifts.to/en/s/spiky-fritter-garlic");
+    expect(text).toContain("https://rifts.to/en/admin/tok2");
+    expect(text).toContain("credential");
+    expect(text).toContain("no responses");
+  });
+
+  it("passes only the fields it was given, so unset ones keep the original's", async () => {
+    const { client, calls } = stubClient();
+    const { mcp } = await connect(client);
+    await mcp.callTool({ name: "clone_survey", arguments: { id: "fuzzy-sleepy-tornado", title: "Week 2" } });
+
+    // Not `{title, slug: undefined, theme: undefined}`: an explicit undefined
+    // theme would read as "no theme" and drop the original's palette.
+    expect(calls).toContainEqual({
+      method: "cloneSurvey",
+      args: ["fuzzy-sleepy-tornado", { title: "Week 2" }],
+    });
+  });
+
+  it("refuses a malformed custom slug", async () => {
+    const { mcp } = await connect(stubClient().client);
+    const res = await mcp.callTool({
+      name: "clone_survey",
+      arguments: { id: "fuzzy-sleepy-tornado", slug: "Not A Slug" },
+    });
+    expect(res.isError).toBe(true);
+  });
+});
+
+describe("save_survey_as_template", () => {
+  it("saves and points at the tool that runs it again", async () => {
+    const { client, calls } = stubClient();
+    const { mcp } = await connect(client);
+    const text = textOf(
+      await mcp.callTool({ name: "save_survey_as_template", arguments: { id: "fuzzy-sleepy-tornado" } })
+    );
+
+    expect(calls).toContainEqual({
+      method: "saveSurveyAsTemplate",
+      args: ["fuzzy-sleepy-tornado", undefined],
+    });
+    expect(text).toContain("Weekly lunch");
+    expect(text).toContain("3 questions");
+    expect(text).toContain("launch_template");
   });
 });
