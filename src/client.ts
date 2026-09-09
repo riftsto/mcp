@@ -203,7 +203,75 @@ export interface CreateSurveyInput {
  * the server validates all of them before writing any, so a half-wrong patch
  * changes nothing at all.
  */
+/**
+ * A survey's results as counts rather than rows.
+ *
+ * The reason this exists alongside `SurveyResults`: a survey with four hundred
+ * written answers is ordinary, and the full read is then far larger than any
+ * model context. A caller that wants "which option won" should not have to
+ * fetch every response to count them itself.
+ */
+export interface QuestionAggregate {
+  index: number;
+  type: "multiple_choice" | "free_text" | "rating";
+  text: string;
+  /** multiple_choice: every option, including the ones nobody picked. */
+  counts?: { option: string; count: number }[];
+  /** How many people answered this question at all. */
+  answered: number;
+  /** multiple_choice: answers naming an option the question no longer has. */
+  unmatched?: number;
+  /** rating: null when nobody rated it, rather than NaN. */
+  mean?: number | null;
+  /** rating: one entry per point on the scale, zero-filled. */
+  distribution?: { value: number; count: number }[];
+}
+
+export interface SurveyAggregate {
+  id: string;
+  title: string;
+  status: "open" | "closed" | "expired";
+  created_at: string;
+  expires_at: string | null;
+  url: string;
+  theme: SurveyTheme;
+  response_count: number;
+  first_response_at: string | null;
+  last_response_at: string | null;
+  questions: QuestionAggregate[];
+}
+
+/** What `clone_survey` returns: a whole new survey, not a copy of a row. */
+export interface ClonedSurvey extends CreatedSurvey {
+  /** The survey the questions came from. */
+  cloned_from: string;
+}
+
+export interface SavedTemplate {
+  id: string;
+  name: string;
+  question_count: number;
+  created_at: string;
+  /** The survey the questions came from. */
+  saved_from: string;
+}
+
+export interface CloneSurveyInput {
+  /** Defaults to the original's title. */
+  title?: string;
+  /** Paid-tier vanity slug, same rules and same 409 as create. */
+  slug?: string;
+  /** Defaults to the original's palette rather than the house one. */
+  theme?: SurveyTheme;
+}
+
 export interface UpdateSurveyInput {
+  /**
+   * Renames the survey. The link and the responses are untouched: a response
+   * is keyed to its survey by id and its answers by question index, so the
+   * title is a join key for nothing.
+   */
+  title?: string;
   status?: "open" | "closed";
   theme?: SurveyTheme;
   /** Replaces the whole list. Restricted once the survey has responses. */
@@ -322,6 +390,47 @@ export class RiftsClient {
       `/api/v1/surveys/${encodeURIComponent(id)}`,
       patch
     );
+  }
+
+  /**
+   * Results as counts rather than rows. Prefer this over `getSurveyResults`
+   * whenever the caller wants numbers: the full read carries every written
+   * answer, which on a busy survey is far more than a model can hold.
+   */
+  async getSurveySummary(id: string): Promise<SurveyAggregate> {
+    return this.request<SurveyAggregate>(
+      "GET",
+      `/api/v1/surveys/${encodeURIComponent(id)}?view=aggregate`
+    );
+  }
+
+  /**
+   * Runs the same questions again as a brand new survey: new link, new admin
+   * token, no responses. Not a copy of the row — the clone does not inherit
+   * the original's archived state or expiry.
+   */
+  async cloneSurvey(id: string, input: CloneSurveyInput = {}): Promise<ClonedSurvey> {
+    return this.request<ClonedSurvey>(
+      "POST",
+      `/api/v1/surveys/${encodeURIComponent(id)}/clone`,
+      input
+    );
+  }
+
+  /** The other direction from `launchTemplate`. A snapshot, not a link. */
+  async saveSurveyAsTemplate(id: string, name?: string): Promise<SavedTemplate> {
+    return this.request<SavedTemplate>(
+      "POST",
+      `/api/v1/surveys/${encodeURIComponent(id)}/save-as-template`,
+      name === undefined ? {} : { name }
+    );
+  }
+
+  /** Renames a survey. The narrowest write on the API: nothing else moves. */
+  async renameSurvey(id: string, title: string): Promise<UpdatedSurvey> {
+    return this.request<UpdatedSurvey>("PATCH", `/api/v1/surveys/${encodeURIComponent(id)}`, {
+      title,
+    });
   }
 
   async closeSurvey(id: string): Promise<CloseResult> {
